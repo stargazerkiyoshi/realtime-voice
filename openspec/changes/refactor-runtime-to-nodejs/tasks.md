@@ -1,0 +1,11 @@
+## 1. 实施
+- [x] 1.1 定义 TypeScript 项目结构、tsconfig 与 Fastify 启动入口
+- [x] 1.2 迁移 WebSocket 适配器（A 通道）到 Fastify
+- [x] 1.3 迁移会话内核（事件总线、FSM、上下文、打断）
+- [x] 1.4 迁移音频链路占位实现（VAD/ASR）
+- [x] 1.5 迁移 LLM/TTS 占位实现与分片器
+- [x] 1.6 迁移工具框架与内置工具（`hangup`、`send_notification`）
+- [x] 1.7 迁移观测占位实现（logger/metrics/tracing）
+- [x] 1.8 Node.js 达到对齐后移除或归档 Python 入口
+- [x] 1.9 更新文档与 `openspec/project.md` 的技术栈说明
+- [ ] 1.10 增补会话 FSM 与事件处理的测试
