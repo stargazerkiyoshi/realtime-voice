@@ -1,22 +1,23 @@
 {
-    "name": "realtime-voice",
-    "version": "0.1.0",
-    "private": true,
-    "type": "commonjs",
-    "scripts": {
-        "dev": "tsx watch src/server.ts",
-        "build": "tsc -p tsconfig.json",
-        "start": "node dist/server.js"
-    },
-    "dependencies": {
-        "fastify": "^4.28.1",
-        "@fastify/websocket": "^10.0.1",
-        "ws": "^8.17.0"
-    },
-    "devDependencies": {
-        "typescript": "^5.4.5",
-        "tsx": "^4.17.0",
-        "@types/node": "^20.11.30",
-        "@types/ws": "^8.5.12"
-    }
+    "name":  "realtime-voice",
+    "version":  "0.1.0",
+    "private":  true,
+    "type":  "commonjs",
+    "scripts":  {
+                    "dev":  "tsx watch src/server.ts",
+                    "build":  "tsc -p tsconfig.json",
+                    "start":  "node dist/server.js",
+                    "test":  "node --import tsx --test tests/async_queue.test.ts tests/chunker.test.ts"
+                },
+    "dependencies":  {
+                         "fastify":  "^4.28.1",
+                         "@fastify/websocket":  "^10.0.1",
+                         "ws":  "^8.17.0"
+                     },
+    "devDependencies":  {
+                            "typescript":  "^5.4.5",
+                            "tsx":  "^4.17.0",
+                            "@types/node":  "^20.11.30",
+                            "@types/ws":  "^8.5.12"
+                        }
 }

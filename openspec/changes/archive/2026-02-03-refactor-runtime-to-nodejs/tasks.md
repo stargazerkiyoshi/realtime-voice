@@ -8,4 +8,4 @@
 - [x] 1.7 迁移观测占位实现（logger/metrics/tracing）
 - [x] 1.8 Node.js 达到对齐后移除或归档 Python 入口
 - [x] 1.9 更新文档与 `openspec/project.md` 的技术栈说明
-- [ ] 1.10 增补会话 FSM 与事件处理的测试
+- [x] 1.10 增补会话 FSM 与事件处理的测试
