@@ -1,0 +1,14 @@
+﻿:root {
+  color-scheme: dark;
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: #0b0f19;
+  color: #e6edf3;
+  font-family: 'Source Han Sans SC', 'PingFang SC', 'Noto Sans SC', system-ui, -apple-system, sans-serif;
+}

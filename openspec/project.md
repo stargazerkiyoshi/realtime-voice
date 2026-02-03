@@ -13,6 +13,9 @@
 - Fastify WebSocket 服务（`src/server.ts`）
 - tsx（本地开发运行）
 - TypeScript 编译产物（`dist/`）
+- 前端：Vite + React + Ant Design
+- 路由：React Router
+- 全局状态：Zustand
 
 ## 项目约定
 
@@ -58,6 +61,11 @@
 - `@fastify/websocket`
 - `typescript`
 - `tsx`
+- `react`
+- `react-dom`
+- `react-router-dom`
+- `zustand`
+- `antd`
 
 规划中的集成（尚未实现）：
 - ASR 服务

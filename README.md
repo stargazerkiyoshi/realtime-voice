@@ -8,6 +8,7 @@
 - 支持打断（barge-in）
 - WebSocket 入口（A 通道）
 - 工具框架占位（`hangup`/`send_notification`）
+- 前端测试台（Vite + React + Ant Design）
 
 ## 目录结构
 ```
@@ -21,6 +22,7 @@ src/
   tools/               # 工具框架与内置工具
   tts/                 # TTS 占位与播放队列
   server.ts            # Fastify 入口
+frontend/              # 前端测试台（Vite + React + AntD）
 legacy/python/         # 旧 Python 实现（已归档）
 ```
 
@@ -30,6 +32,14 @@ npm install
 npm run dev
 ```
 默认监听：`0.0.0.0:3000`
+
+## 前端运行方式
+```
+cd frontend
+pnpm install
+pnpm dev
+```
+默认地址：`http://localhost:5173`
 
 ## WebSocket 协议（当前占位）
 - 客户端发送：
