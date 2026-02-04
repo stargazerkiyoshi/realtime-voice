@@ -1,4 +1,4 @@
-﻿import type { OrchestratorAction, OrchestratorPolicy } from './base_policy';
+import type { OrchestratorAction, OrchestratorPolicy } from './base-policy';
 
 export class AgentPolicy implements OrchestratorPolicy {
   async *plan(_input: { sessionId: string; userText: string }): AsyncGenerator<OrchestratorAction> {

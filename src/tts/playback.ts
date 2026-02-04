@@ -1,4 +1,4 @@
-﻿import { AsyncQueue } from '../core/async_queue';
+﻿import { AsyncQueue } from '../core/async-queue';
 
 export class PlaybackQueue {
   private q = new AsyncQueue<Buffer>();

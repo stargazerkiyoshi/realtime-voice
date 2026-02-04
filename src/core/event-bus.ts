@@ -1,4 +1,4 @@
-﻿import { AsyncQueue } from './async_queue';
+﻿import { AsyncQueue } from './async-queue';
 import type { Event } from './events';
 
 export class EventBus {

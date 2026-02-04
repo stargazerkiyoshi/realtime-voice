@@ -1,6 +1,6 @@
 ﻿import Fastify from 'fastify';
 import websocket from '@fastify/websocket';
-import { wsHandler } from './adapters/ws_handler';
+import { wsHandler } from './adapters/ws-handler';
 
 const server = Fastify({ logger: true });
 

@@ -1,12 +1,12 @@
-﻿import { EventBus } from './event_bus';
+﻿import { EventBus } from './event-bus';
 import type { Event } from './events';
 import { State, FSM } from './fsm';
 import { ConversationContext } from './context';
-import { BargeInController } from './barge_in';
+import { BargeInController } from './barge-in';
 import { SimpleEnergyVAD } from '../audio/vad';
-import { LLMClient } from '../llm/llm_base';
+import { LLMClient } from '../llm/llm-base';
 import { Chunker } from '../llm/chunker';
-import { TTSClient } from '../tts/tts_base';
+import { TTSClient } from '../tts/tts-base';
 import { PlaybackQueue } from '../tts/playback';
 
 const nowMs = () => Date.now();

@@ -1,6 +1,6 @@
 ﻿import test from 'node:test';
 import assert from 'node:assert/strict';
-import { AsyncQueue } from '../src/core/async_queue';
+import { AsyncQueue } from '../src/core/async-queue';
 
 test('async queue delivers items in order', async () => {
   const q = new AsyncQueue<number>();
