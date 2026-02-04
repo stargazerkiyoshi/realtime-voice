@@ -1,6 +1,10 @@
 export type Config = {
-  volcAppId?: string;
-  volcToken?: string;
+  // Volc ASR v3 sauc/bigmodel_* headers
+  volcAppKey?: string;
+  volcAccessKey?: string;
+  volcResourceId?: string;
+  volcConnectId?: string;
+  // Optional: still keep legacy TTS fields
   volcCluster?: string;
   volcAsrUrl: string;
   volcTtsUrl: string;
@@ -13,10 +17,13 @@ export type Config = {
 
 // Centralized config with sensible defaults; all values can be overridden via env.
 export const config: Config = {
-  volcAppId: process.env.VOLC_APP_ID,
-  volcToken: process.env.VOLC_TOKEN,
+  volcAppKey: process.env.VOLC_APP_KEY,
+  volcAccessKey: process.env.VOLC_ACCESS_KEY,
+  volcResourceId: process.env.VOLC_RESOURCE_ID,
+  volcConnectId: process.env.VOLC_CONNECT_ID,
   volcCluster: process.env.VOLC_CLUSTER ?? 'volcano_tts',
-  volcAsrUrl: process.env.VOLC_ASR_URL ?? 'wss://openspeech.bytedance.com/api/v2/asr',
+  // v3 bigmodel_async is the optimized bidirectional streaming endpoint
+  volcAsrUrl: process.env.VOLC_ASR_URL ?? 'wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async',
   volcTtsUrl: process.env.VOLC_TTS_URL ?? 'wss://openspeech.bytedance.com/api/v1/tts/ws_binary',
   volcVoiceType: process.env.VOLC_VOICE_TYPE ?? 'BV700_V2_streaming',
   volcSampleRate: Number(process.env.VOLC_SAMPLE_RATE ?? 24000),

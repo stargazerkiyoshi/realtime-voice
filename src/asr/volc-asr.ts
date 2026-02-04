@@ -1,4 +1,6 @@
 import WebSocket from 'ws';
+import zlib from 'zlib';
+import { randomUUID } from 'crypto';
 import { config } from '../config';
 import { sleep } from '../llm/util';
 
@@ -12,95 +14,273 @@ export type AsrPartial = {
 
 export type AsrFinal = AsrPartial & { isFinal: true };
 
+type HeaderFields = {
+  version: number;
+  headerSize: number;
+  msgType: number;
+  flags: number;
+  serialization: number;
+  compression: number;
+  reserved: number;
+};
+
+const VERSION = 0b0001;
+const HEADER_SIZE_UNITS = 0b0001; // 4 bytes
+const MSG_FULL_CLIENT_REQUEST = 0b0001;
+const MSG_AUDIO_ONLY = 0b0010;
+const MSG_FULL_SERVER_RESPONSE = 0b1001;
+const MSG_ERROR = 0b1111;
+
+const FLAG_SEQ_POSITIVE = 0b0001;
+const FLAG_LAST_PACKET_NO_SEQ = 0b0010;
+const FLAG_SEQ_NEGATIVE_LAST = 0b0011;
+
+const SERIALIZE_NONE = 0b0000;
+const SERIALIZE_JSON = 0b0001;
+const COMPRESS_NONE = 0b0000;
+const COMPRESS_GZIP = 0b0001;
+
+function buildHeader(msgType: number, flags: number, serialization: number, compression: number): Buffer {
+  const b0 = (VERSION << 4) | (HEADER_SIZE_UNITS & 0x0f);
+  const b1 = ((msgType & 0x0f) << 4) | (flags & 0x0f);
+  const b2 = ((serialization & 0x0f) << 4) | (compression & 0x0f);
+  const b3 = 0x00;
+  return Buffer.from([b0, b1, b2, b3]);
+}
+
+function parseHeader(buf: Buffer): HeaderFields {
+  const b0 = buf[0];
+  const b1 = buf[1];
+  const b2 = buf[2];
+  return {
+    version: (b0 >> 4) & 0x0f,
+    headerSize: b0 & 0x0f,
+    msgType: (b1 >> 4) & 0x0f,
+    flags: b1 & 0x0f,
+    serialization: (b2 >> 4) & 0x0f,
+    compression: b2 & 0x0f,
+    reserved: buf[3]
+  };
+}
+
+function gzip(buf: Buffer): Buffer {
+  return zlib.gzipSync(buf);
+}
+
+function gunzipMaybe(buf: Buffer, compression: number): Buffer {
+  if (compression === COMPRESS_GZIP) return zlib.gunzipSync(buf);
+  return buf;
+}
+
+function toBigEndian32(n: number): Buffer {
+  const b = Buffer.alloc(4);
+  b.writeInt32BE(n, 0);
+  return b;
+}
+
+function readUInt32BE(buf: Buffer, offset: number): number {
+  return buf.readUInt32BE(offset);
+}
+
 export class VolcAsrClient {
   private ws: WebSocket | null = null;
   private connected = false;
   private closing = false;
-  private queue: Buffer[] = [];
+  private started = false;
+  private seq = 1;
+
+  private resultQueue: Array<AsrPartial | AsrFinal> = [];
+  private waiters: Array<(v: AsrPartial | AsrFinal) => void> = [];
 
   constructor(
     private readonly opts: {
-      appId?: string;
-      token?: string;
-      cluster?: string;
+      appKey?: string;
+      accessKey?: string;
+      resourceId?: string;
+      connectId?: string;
       url?: string;
     } = {}
   ) {}
 
-  async connect() {
-    if (this.connected) return;
+  private headers() {
+    return {
+      'X-Api-App-Key': this.opts.appKey ?? config.volcAppKey ?? '',
+      'X-Api-Access-Key': this.opts.accessKey ?? config.volcAccessKey ?? '',
+      'X-Api-Resource-Id': this.opts.resourceId ?? config.volcResourceId ?? '',
+      'X-Api-Connect-Id': this.opts.connectId ?? config.volcConnectId ?? randomUUID()
+    };
+  }
+
+  private async ensureConnected() {
+    if (this.connected && this.ws) return;
     const url = this.opts.url ?? config.volcAsrUrl;
-    this.ws = new WebSocket(url);
+    this.ws = new WebSocket(url, { headers: this.headers() });
 
     await new Promise<void>((resolve, reject) => {
-      if (!this.ws) return reject(new Error('ws not created'));
-      this.ws.once('open', () => resolve());
-      this.ws.once('error', reject);
+      this.ws?.once('open', () => resolve());
+      this.ws?.once('error', reject);
     });
 
     this.connected = true;
+    this.ws.on('message', (data: WebSocket.RawData) => this.handleMessage(data as Buffer));
+    this.ws.on('error', () => {
+      this.connected = false;
+    });
+    this.ws.on('close', () => {
+      this.connected = false;
+      this.closing = true;
+    });
+  }
 
-    const startFrame = {
-      app: { appid: this.opts.appId ?? config.volcAppId, token: this.opts.token ?? config.volcToken },
+  private enqueue(res: AsrPartial | AsrFinal) {
+    const waiter = this.waiters.shift();
+    if (waiter) {
+      waiter(res);
+    } else {
+      this.resultQueue.push(res);
+    }
+  }
+
+  private handleMessage(data: Buffer) {
+    if (data.length < 8) return;
+    const header = parseHeader(data.slice(0, 4));
+    const hasSeq = header.flags === FLAG_SEQ_POSITIVE || header.flags === FLAG_SEQ_NEGATIVE_LAST;
+    let offset = 4;
+    let seqNum: number | null = null;
+    if (hasSeq) {
+      seqNum = data.readInt32BE(offset);
+      offset += 4;
+    }
+    const payloadSize = readUInt32BE(data, offset);
+    offset += 4;
+    const payloadBuf = data.slice(offset, offset + payloadSize);
+
+    if (header.msgType === MSG_ERROR) {
+      return;
+    }
+
+    if (header.msgType !== MSG_FULL_SERVER_RESPONSE) return;
+
+    const decompressed = gunzipMaybe(payloadBuf, header.compression);
+    let obj: any;
+    try {
+      obj = JSON.parse(decompressed.toString('utf8'));
+    } catch {
+      return;
+    }
+
+    const result = obj?.result;
+    if (!result) return;
+
+    const utterances = Array.isArray(result.utterances) ? result.utterances : [];
+    const lastUtt = utterances.length > 0 ? utterances[utterances.length - 1] : undefined;
+    const text = (lastUtt?.text as string) || (result.text as string) || '';
+    const startMs = typeof lastUtt?.start_time === 'number' ? lastUtt.start_time : undefined;
+    const endMs = typeof lastUtt?.end_time === 'number' ? lastUtt.end_time : undefined;
+    const isFinal =
+      Boolean(lastUtt?.definite) ||
+      Boolean(result.definite) ||
+      Boolean(result.is_final) ||
+      header.flags === FLAG_SEQ_NEGATIVE_LAST ||
+      (typeof seqNum === 'number' && seqNum < 0);
+
+    if (!text) return;
+
+    this.enqueue({
+      text,
+      startMs,
+      endMs,
+      isFinal: isFinal || undefined
+    });
+  }
+
+  private buildFullClientRequestPayload(): Buffer {
+    const payload = {
       user: { uid: 'anonymous' },
-      cloud: { cluster: this.opts.cluster ?? config.volcCluster }
+      audio: { format: 'pcm', rate: 16000, bits: 16, channel: 1 },
+      request: {
+        model_name: 'bigmodel',
+        enable_itn: true,
+        enable_punc: true,
+        enable_ddc: false
+      }
     };
-    this.ws.send(JSON.stringify(startFrame));
+    const json = Buffer.from(JSON.stringify(payload), 'utf8');
+    return gzip(json);
+  }
+
+  private sendFullClientRequest() {
+    const payload = this.buildFullClientRequestPayload();
+    const header = buildHeader(MSG_FULL_CLIENT_REQUEST, 0b0000, SERIALIZE_JSON, COMPRESS_GZIP);
+    const size = toBigEndian32(payload.length);
+    const frame = Buffer.concat([header, size, payload]);
+    this.ws?.send(frame);
+  }
+
+  private sendAudioFrame(pcm: Buffer, isLast = false) {
+    const payload = gzip(pcm);
+    const flags = isLast ? FLAG_SEQ_NEGATIVE_LAST : FLAG_SEQ_POSITIVE;
+    const header = buildHeader(MSG_AUDIO_ONLY, flags, SERIALIZE_NONE, COMPRESS_GZIP);
+    const seq = isLast ? -this.seq : this.seq;
+    const seqBuf = toBigEndian32(seq);
+    const sizeBuf = toBigEndian32(payload.length);
+    const frame = Buffer.concat([header, seqBuf, sizeBuf, payload]);
+    this.ws?.send(frame);
+    this.seq += 1;
+  }
+
+  async connect() {
+    await this.ensureConnected();
+    if (!this.started) {
+      this.sendFullClientRequest();
+      this.started = true;
+    }
   }
 
   async close() {
+    if (this.closing) return;
     this.closing = true;
-    if (this.ws && this.connected) {
-      this.ws.close();
+    try {
+      if (this.connected && this.ws) {
+        // send final (negative seq) packet to signal end
+        this.sendAudioFrame(Buffer.alloc(0), true);
+      }
+    } catch {
+      // ignore
     }
-    this.ws = null;
+    await sleep(10);
+    this.ws?.close();
     this.connected = false;
   }
 
   async feed(pcm16: Buffer) {
-    if (!this.ws || !this.connected) {
-      await this.connect();
-    }
-    if (!this.ws) return;
-    this.ws.send(pcm16);
+    await this.connect();
+    if (!this.ws || this.closing) return;
+    this.sendAudioFrame(pcm16, false);
   }
 
   async *stream(): AsyncGenerator<AsrPartial | AsrFinal> {
-    while (!this.ws) {
-      await sleep(10);
-    }
-    const ws = this.ws!;
-
-    ws.on('message', (data) => {
-      // no-op; actual messages consumed via async iterator below
-    });
-
-    const messages: Array<AsrPartial | AsrFinal> = [];
-    ws.on('message', (data) => {
-      try {
-        const txt = typeof data === 'string' ? data : data.toString('utf8');
-        const obj = JSON.parse(txt);
-        const isFinal = obj?.is_final || obj?.result?.is_final;
-        const text = obj?.text ?? obj?.result?.text ?? '';
-        const confidence = obj?.confidence ?? obj?.result?.confidence;
-        const startMs = obj?.start_time ?? obj?.result?.start_ms;
-        const endMs = obj?.end_time ?? obj?.result?.end_ms;
-        if (text) {
-          messages.push({ text, confidence, startMs, endMs, isFinal: !!isFinal });
-        }
-      } catch {
-        // ignore parse errors
-      }
-    });
-
+    await this.connect();
     while (!this.closing) {
-      if (messages.length === 0) {
-        await sleep(10);
-        continue;
+      if (this.resultQueue.length > 0) {
+        const v = this.resultQueue.shift();
+        if (v) {
+          yield v;
+          continue;
+        }
       }
-      const m = messages.shift();
-      if (m) {
-        yield m;
+      const v = await new Promise<AsrPartial | AsrFinal>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('ASR timeout')), 30000);
+        this.waiters.push((res) => {
+          clearTimeout(timer);
+          resolve(res);
+        });
+      }).catch(() => undefined);
+      if (v) {
+        yield v;
+      } else {
+        // timeout; break to avoid tight loop
+        break;
       }
     }
   }
