@@ -3,6 +3,7 @@ import WebSocket from 'ws';
 import { config } from '../config';
 import { sleep } from '../llm/util';
 import type { TtsProvider } from './types';
+import { logger } from '../observability/logger';
 
 export type VolcTtsOptions = {
   voiceType?: string;
@@ -167,6 +168,8 @@ export class VolcTtsClient implements TtsProvider {
     const waiters: Array<(frame: ParsedFrame) => void> = [];
     let failed: Error | null = null;
     let closed = false;
+    let audioFrames = 0;
+    let audioBytes = 0;
 
     const pushFrame = (frame: ParsedFrame) => {
       const waiter = waiters.shift();
@@ -188,12 +191,17 @@ export class VolcTtsClient implements TtsProvider {
           : Buffer.from(data as ArrayBuffer);
       const parsed = parseFrame(raw);
       if (!parsed) return;
+      if (parsed.event) {
+        logger.debug('tts recv event', { event: parsed.event, msgType: parsed.msgType, payloadBytes: parsed.payload.length });
+      }
       pushFrame(parsed);
     });
     ws.on('error', (err) => {
+      logger.error('tts ws error', err);
       failed = err instanceof Error ? err : new Error(String(err));
     });
     ws.on('close', () => {
+      logger.warn('tts ws close', { audioFrames, audioBytes });
       closed = true;
     });
 
@@ -203,6 +211,12 @@ export class VolcTtsClient implements TtsProvider {
     signal?.addEventListener('abort', onAbort);
 
     try {
+      logger.info('tts stream start', {
+        textLen: text.length,
+        url: this.opts.url ?? config.volcTtsUrl,
+        resourceId: this.opts.resourceId ?? config.volcTtsResourceId ?? config.volcResourceId ?? '',
+        voiceType: this.opts.voiceType ?? config.volcVoiceType
+      });
       await new Promise<void>((resolve, reject) => {
         ws.once('open', () => resolve());
         ws.once('error', reject);
@@ -221,6 +235,7 @@ export class VolcTtsClient implements TtsProvider {
         }
         if (frame.event === EVENT_CONNECTION_STARTED) break;
       }
+      logger.info('tts connection started');
 
       const sessionId = randomUUID();
       const startSessionPayload = {
@@ -250,6 +265,7 @@ export class VolcTtsClient implements TtsProvider {
         }
         if (frame.event === EVENT_SESSION_STARTED && frame.sessionId === sessionId) break;
       }
+      logger.info('tts session started', { sessionId });
 
       ws.send(
         buildEventFrame(EVENT_TASK_REQUEST, Buffer.from(JSON.stringify({ req_params: { text } }), 'utf8'), {
@@ -266,11 +282,17 @@ export class VolcTtsClient implements TtsProvider {
         }
         if (frame.event === EVENT_TTS_RESPONSE && frame.msgType === MSG_AUDIO_ONLY_RESPONSE && frame.sessionId === sessionId) {
           if (frame.payload.length > 0) {
+            audioFrames += 1;
+            audioBytes += frame.payload.length;
+            if (audioFrames % 10 === 0) {
+              logger.debug('tts audio frame', { audioFrames, audioBytes, lastBytes: frame.payload.length });
+            }
             yield frame.payload;
           }
           continue;
         }
         if (frame.event === EVENT_SESSION_FINISHED && frame.sessionId === sessionId) {
+          logger.info('tts session finished', { sessionId, audioFrames, audioBytes });
           break;
         }
         if (frame.event === EVENT_SESSION_FAILED && frame.sessionId === sessionId) {
@@ -290,6 +312,7 @@ export class VolcTtsClient implements TtsProvider {
       }
 
       if (!closed) ws.close();
+      logger.info('tts stream end', { audioFrames, audioBytes });
     }
   }
 }

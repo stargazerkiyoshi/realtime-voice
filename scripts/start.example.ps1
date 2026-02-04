@@ -1,6 +1,9 @@
 $ErrorActionPreference = "Stop"
 
 $env:PORT = "3000"
+$env:DEBUG_VOICE = "1"
+$env:LOG_TO_FILE = "1"
+$env:LOG_FILE = "logs/voice.log"
 $env:ASR_PROVIDER = "volc"
 $env:TTS_PROVIDER = "volc"
 
@@ -16,5 +19,6 @@ $env:VOLC_TTS_MODEL = "seed-tts-1.1"
 
 $env:OPENAI_API_KEY = "your_openai_api_key"
 $env:OPENAI_MODEL = "gpt-4.1-mini"
+$env:OPENAI_BASE_URL = ""
 
 pnpm dev

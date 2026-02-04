@@ -45,7 +45,7 @@ export const config: Config = {
   volcAppKey: process.env.VOLC_APP_KEY,
   volcAccessKey: process.env.VOLC_ACCESS_KEY,
   volcAsrResourceId: process.env.VOLC_ASR_RESOURCE_ID,
-  volcTtsResourceId: process.env.VOLC_TTS_RESOURCE_ID ?? process.env.VOLC_RESOURCE_ID,
+  volcTtsResourceId: process.env.VOLC_TTS_RESOURCE_ID ?? 'seed-tts-1.0',
   volcResourceId: process.env.VOLC_RESOURCE_ID,
   volcConnectId: process.env.VOLC_CONNECT_ID,
   // v3 bigmodel_async is the optimized bidirectional streaming endpoint
