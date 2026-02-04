@@ -33,6 +33,18 @@ npm run dev
 ```
 默认监听：`0.0.0.0:3000`
 
+## 启动脚本与示例
+- 示例环境文件：`.env.example`
+- 示例启动脚本（可提交）：`scripts/start.example.ps1`
+- 本地启动脚本（不会提交）：`scripts/start.local.ps1`
+
+建议流程：
+1. 复制示例脚本：`Copy-Item scripts/start.example.ps1 scripts/start.local.ps1`
+2. 编辑 `scripts/start.local.ps1`，填入你自己的密钥
+3. 启动：`pnpm run dev:local`
+
+如果只想看示例配置，可直接运行：`pnpm run dev:example`
+
 ## 测试
 ```
 pnpm test

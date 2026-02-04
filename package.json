@@ -5,6 +5,8 @@
     "type":  "commonjs",
     "scripts":  {
                     "dev":  "tsx watch src/server.ts",
+                    "dev:example": "powershell -ExecutionPolicy Bypass -File scripts/start.example.ps1",
+                    "dev:local": "powershell -ExecutionPolicy Bypass -File scripts/start.local.ps1",
                     "build":  "tsc -p tsconfig.json",
                     "start":  "node dist/server.js",
                     "test":  "node --import tsx --test tests/async-queue.test.ts tests/chunker.test.ts"
