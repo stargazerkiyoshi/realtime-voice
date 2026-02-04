@@ -1,13 +1,43 @@
-﻿import { sleep } from './util';
+﻿import OpenAI from 'openai';
+import { config } from '../config';
+
+type ChatMessage = { role: 'system' | 'user' | 'assistant'; content: string };
 
 export class LLMClient {
-  async *stream(messages: Array<{ role: string; content: string }>, signal?: AbortSignal): AsyncGenerator<string> {
-    const last = messages[messages.length - 1]?.content ?? '';
-    const demo = `好的，我听到了。你刚才说的是：${last}。`;
-    for (const ch of demo) {
+  private client: OpenAI;
+  private model: string;
+
+  constructor() {
+    this.client = new OpenAI({
+      apiKey: config.openaiApiKey,
+      baseURL: config.openaiBaseUrl
+    });
+    this.model = config.openaiModel;
+  }
+
+  async *stream(messages: Array<ChatMessage>, signal?: AbortSignal): AsyncGenerator<string> {
+    const response = await this.client.chat.completions.create(
+      {
+        model: this.model,
+        stream: true,
+        messages
+      },
+      { signal }
+    );
+
+    for await (const chunk of response) {
       if (signal?.aborted) return;
-      await sleep(20);
-      yield ch;
+      const delta = chunk.choices?.[0]?.delta?.content;
+      if (!delta) continue;
+      if (typeof delta === 'string') {
+        yield delta;
+      } else if (Array.isArray(delta)) {
+        for (const part of delta) {
+          if (part.type === 'text') {
+            yield part.text ?? '';
+          }
+        }
+      }
     }
   }
 }

@@ -8,6 +8,7 @@ import { LLMClient } from '../llm/llm-base';
 import { Chunker } from '../llm/chunker';
 import { TTSClient } from '../tts/tts-base';
 import { PlaybackQueue } from '../tts/playback';
+import { VolcAsrClient } from '../asr/volc-asr';
 
 const nowMs = () => Date.now();
 
@@ -25,12 +26,14 @@ export class Session {
   private llm = new LLMClient();
   private tts = new TTSClient();
   private chunker = new Chunker();
+  private asr = new VolcAsrClient();
 
   private playback = new PlaybackQueue();
   private barge = new BargeInController(this.playback);
 
   private playbackTask: Promise<void> | null = null;
   private runnerTask: Promise<void> | null = null;
+  private asrTask: Promise<void> | null = null;
 
   private turnPcm = Buffer.alloc(0);
 
@@ -44,6 +47,7 @@ export class Session {
     this.fsm.state = State.LISTENING;
     this.playbackTask = this.playbackLoop();
     this.runnerTask = this.eventLoop();
+    this.asrTask = this.asrLoop();
   }
 
   async stop(reason = 'stop') {
@@ -79,6 +83,7 @@ export class Session {
         this.barge.interrupt();
         this.fsm.state = State.ENDED;
         await this.sendJson({ type: 'end', reason: (e.data as any).reason ?? 'ended' });
+        await this.asr.close();
         break;
       }
 
@@ -87,21 +92,25 @@ export class Session {
           const pcm16 = (e.data as any).pcm16 as Buffer;
           this.turnPcm = Buffer.concat([this.turnPcm, pcm16]);
 
+          await this.asr.feed(pcm16);
+
           for (const ev of this.vad.process(pcm16)) {
             if (ev === 'speech_start') {
               await this.sendJson({ type: 'vad', event: 'speech_start', ts_ms: e.ts_ms });
             } else if (ev === 'speech_end') {
               await this.sendJson({ type: 'vad', event: 'speech_end', ts_ms: e.ts_ms });
-              await this.bus.emit({
-                type: 'ASR_FINAL',
-                data: { text: '（ASR占位）我说了一句话' },
-                ts_ms: nowMs()
-              });
             }
           }
+        } else if (e.type === 'ASR_PARTIAL') {
+          const text = (e.data as any).text as string;
+          const confidence = (e.data as any).confidence as number | undefined;
+          await this.sendJson({ type: 'asr', is_final: false, text, confidence, ts_ms: e.ts_ms });
         } else if (e.type === 'ASR_FINAL') {
           const text = (e.data as any).text as string;
-          await this.sendJson({ type: 'asr', is_final: true, text, ts_ms: e.ts_ms });
+          const confidence = (e.data as any).confidence as number | undefined;
+          const start_ms = (e.data as any).startMs as number | undefined;
+          const end_ms = (e.data as any).endMs as number | undefined;
+          await this.sendJson({ type: 'asr', is_final: true, text, confidence, start_ms, end_ms, ts_ms: e.ts_ms });
 
           this.ctx.turnId += 1;
           this.ctx.history.push({ role: 'user', content: text });
@@ -192,6 +201,26 @@ export class Session {
           ttsAbort = null;
         }
       }
+    }
+  }
+
+  private async asrLoop() {
+    try {
+      for await (const res of this.asr.stream()) {
+        const type = res.isFinal ? 'ASR_FINAL' : 'ASR_PARTIAL';
+        await this.bus.emit({
+          type,
+          data: {
+            text: res.text,
+            confidence: res.confidence,
+            startMs: res.startMs,
+            endMs: res.endMs
+          },
+          ts_ms: nowMs()
+        });
+      }
+    } catch (_e) {
+      // swallow ASR errors for now
     }
   }
 }

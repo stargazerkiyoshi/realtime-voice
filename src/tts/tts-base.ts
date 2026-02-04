@@ -1,13 +1,12 @@
-﻿import { sleep } from '../llm/util';
+﻿import { VolcTtsClient } from './volc-tts';
 
 export class TTSClient {
+  private client = new VolcTtsClient();
+
   async *stream(text: string, signal?: AbortSignal): AsyncGenerator<Buffer> {
-    const chunk = Buffer.alloc(960 * 2, 0);
-    const count = Math.max(1, Math.floor(text.length / 6));
-    for (let i = 0; i < count; i++) {
+    for await (const audio of this.client.stream(text, signal)) {
       if (signal?.aborted) return;
-      await sleep(20);
-      yield chunk;
+      yield audio;
     }
   }
 }
