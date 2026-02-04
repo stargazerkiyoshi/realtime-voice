@@ -9,6 +9,7 @@ import { Chunker } from '../llm/chunker';
 import { TTSClient } from '../tts/tts-base';
 import { PlaybackQueue } from '../tts/playback';
 import { AsrClient } from '../asr/asr-base';
+import { config } from '../config';
 
 const nowMs = () => Date.now();
 
@@ -66,7 +67,7 @@ export class Session {
         type: 'tts',
         seq: 0,
         format: 'pcm16',
-        sample_rate: 24000,
+        sample_rate: config.volcSampleRate,
         payload_b64: audio.toString('base64')
       });
     }
@@ -84,6 +85,7 @@ export class Session {
         this.fsm.state = State.ENDED;
         await this.sendJson({ type: 'end', reason: (e.data as any).reason ?? 'ended' });
         await this.asr.close();
+        await this.tts.close();
         break;
       }
 

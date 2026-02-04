@@ -97,7 +97,7 @@ export class VolcAsrClient implements AsrProvider {
     return {
       'X-Api-App-Key': this.opts.appKey ?? config.volcAppKey ?? '',
       'X-Api-Access-Key': this.opts.accessKey ?? config.volcAccessKey ?? '',
-      'X-Api-Resource-Id': this.opts.resourceId ?? config.volcResourceId ?? '',
+      'X-Api-Resource-Id': this.opts.resourceId ?? config.volcAsrResourceId ?? config.volcResourceId ?? '',
       'X-Api-Connect-Id': this.opts.connectId ?? config.volcConnectId ?? randomUUID()
     };
   }
