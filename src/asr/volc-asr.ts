@@ -3,16 +3,7 @@ import zlib from 'zlib';
 import { randomUUID } from 'crypto';
 import { config } from '../config';
 import { sleep } from '../llm/util';
-
-export type AsrPartial = {
-  text: string;
-  confidence?: number;
-  startMs?: number;
-  endMs?: number;
-  isFinal?: boolean;
-};
-
-export type AsrFinal = AsrPartial & { isFinal: true };
+import type { AsrPartial, AsrFinal, AsrProvider } from './types';
 
 type HeaderFields = {
   version: number;
@@ -82,7 +73,7 @@ function readUInt32BE(buf: Buffer, offset: number): number {
   return buf.readUInt32BE(offset);
 }
 
-export class VolcAsrClient {
+export class VolcAsrClient implements AsrProvider {
   private ws: WebSocket | null = null;
   private connected = false;
   private closing = false;

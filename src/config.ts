@@ -1,4 +1,5 @@
 export type Config = {
+  asrProvider: 'volc';
   // Volc ASR v3 sauc/bigmodel_* headers
   volcAppKey?: string;
   volcAccessKey?: string;
@@ -15,8 +16,19 @@ export type Config = {
   openaiModel: string;
 };
 
+function resolveAsrProvider(): Config['asrProvider'] {
+  switch (process.env.ASR_PROVIDER) {
+    case undefined:
+    case 'volc':
+      return 'volc';
+    default:
+      return 'volc';
+  }
+}
+
 // Centralized config with sensible defaults; all values can be overridden via env.
 export const config: Config = {
+  asrProvider: resolveAsrProvider(),
   volcAppKey: process.env.VOLC_APP_KEY,
   volcAccessKey: process.env.VOLC_ACCESS_KEY,
   volcResourceId: process.env.VOLC_RESOURCE_ID,

@@ -8,7 +8,7 @@ import { LLMClient } from '../llm/llm-base';
 import { Chunker } from '../llm/chunker';
 import { TTSClient } from '../tts/tts-base';
 import { PlaybackQueue } from '../tts/playback';
-import { VolcAsrClient } from '../asr/volc-asr';
+import { AsrClient } from '../asr/asr-base';
 
 const nowMs = () => Date.now();
 
@@ -26,7 +26,7 @@ export class Session {
   private llm = new LLMClient();
   private tts = new TTSClient();
   private chunker = new Chunker();
-  private asr = new VolcAsrClient();
+  private asr = new AsrClient();
 
   private playback = new PlaybackQueue();
   private barge = new BargeInController(this.playback);
