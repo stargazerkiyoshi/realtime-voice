@@ -79,6 +79,7 @@ export class VolcAsrClient implements AsrProvider {
   private connected = false;
   private closing = false;
   private finishing = false;
+  private plannedIdleClose = false;
   private started = false;
   private seq = 2;
   private lastError: Error | null = null;
@@ -88,6 +89,8 @@ export class VolcAsrClient implements AsrProvider {
 
   private resultQueue: Array<AsrPartial | AsrFinal> = [];
   private waiters: Array<(v?: AsrPartial | AsrFinal) => void> = [];
+  private idleTimer: NodeJS.Timeout | null = null;
+  private idleMs: number;
 
   constructor(
     private readonly opts: {
@@ -96,8 +99,11 @@ export class VolcAsrClient implements AsrProvider {
       resourceId?: string;
       connectId?: string;
       url?: string;
+      idleMs?: number;
     } = {}
-  ) {}
+  ) {
+    this.idleMs = this.opts.idleMs ?? 5000;
+  }
 
   private headers() {
     return {
@@ -127,6 +133,7 @@ export class VolcAsrClient implements AsrProvider {
     this.connected = true;
     this.lastError = null;
     this.closing = false;
+    this.plannedIdleClose = false;
     this.finishing = false;
     this.seq = 2;
     this.ws.on('message', (data: WebSocket.RawData) => this.handleMessage(data as Buffer));
@@ -153,6 +160,24 @@ export class VolcAsrClient implements AsrProvider {
     } else {
       this.resultQueue.push(res);
     }
+  }
+
+  private resetIdleTimer() {
+    if (this.idleTimer) {
+      clearTimeout(this.idleTimer);
+    }
+    if (this.idleMs <= 0) return;
+    this.idleTimer = setTimeout(() => {
+      if (this.closing || this.finishing) return;
+      this.plannedIdleClose = true;
+      this.closing = true;
+      try {
+        this.sendAudioFrame(Buffer.alloc(0), true);
+      } catch {
+        /* ignore */
+      }
+      this.ws?.close();
+    }, this.idleMs);
   }
 
   private handleMessage(data: Buffer) {
@@ -289,6 +314,7 @@ export class VolcAsrClient implements AsrProvider {
           this.sendFullClientRequest();
           this.started = true;
         }
+        this.resetIdleTimer();
       })().finally(() => {
         this.connectPromise = null;
       });
@@ -300,6 +326,10 @@ export class VolcAsrClient implements AsrProvider {
     if (this.closing) return;
     this.finishing = true;
     this.closing = true;
+    if (this.idleTimer) {
+      clearTimeout(this.idleTimer);
+      this.idleTimer = null;
+    }
     if (this.connectPromise) {
       try {
         await this.connectPromise;
@@ -328,7 +358,12 @@ export class VolcAsrClient implements AsrProvider {
   async feed(pcm16: Buffer) {
     await this.connect();
     if (!this.ws || this.closing || this.finishing) return;
+    this.resetIdleTimer();
     this.sendAudioFrame(pcm16, false);
+  }
+
+  isPlannedClose() {
+    return this.plannedIdleClose;
   }
 
   async *stream(): AsyncGenerator<AsrPartial | AsrFinal> {

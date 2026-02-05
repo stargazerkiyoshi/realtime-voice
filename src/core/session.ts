@@ -269,6 +269,11 @@ export class Session {
           logger.info('asr loop ended due to planned restart', { sid: this.sessionId });
           return;
         }
+        if (typeof this.asr.isPlannedClose === 'function' && this.asr.isPlannedClose()) {
+          logger.info('asr loop ended after idle close', { sid: this.sessionId });
+          await this.restartAsrForNextTurn();
+          return;
+        }
         logger.warn('asr loop ended unexpectedly', { sid: this.sessionId });
         await this.bus.emit({
           type: 'ERROR',

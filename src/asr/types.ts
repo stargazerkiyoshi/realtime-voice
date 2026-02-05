@@ -15,4 +15,5 @@ export interface AsrProvider {
   close(): Promise<void>;
   feed(pcm16: Buffer): Promise<void>;
   stream(): AsyncGenerator<AsrResult>;
+  isPlannedClose?(): boolean;
 }
