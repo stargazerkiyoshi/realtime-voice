@@ -8,6 +8,22 @@ let fileReady = false;
 
 type Level = 'INFO' | 'WARN' | 'ERROR' | 'DEBUG';
 
+function pad(num: number, size = 2) {
+  return num.toString().padStart(size, '0');
+}
+
+function localTs() {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const MM = pad(d.getMonth() + 1);
+  const dd = pad(d.getDate());
+  const HH = pad(d.getHours());
+  const mm = pad(d.getMinutes());
+  const ss = pad(d.getSeconds());
+  const ms = pad(d.getMilliseconds(), 3);
+  return `${yyyy}-${MM}-${dd} ${HH}:${mm}:${ss}.${ms}`;
+}
+
 function color(level: Level) {
   const reset = '\x1b[0m';
   const colors: Record<Level, string> = {
@@ -20,7 +36,7 @@ function color(level: Level) {
 }
 
 function fmt(level: Level, args: unknown[]) {
-  const ts = new Date().toISOString();
+  const ts = localTs();
   const tag = color(level);
   return [`[${ts}] ${tag}`, ...args];
 }

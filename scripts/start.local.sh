@@ -2,6 +2,10 @@
 set -euo pipefail
 
 export PORT="3000"
+export DEBUG_VOICE="1"
+export LOG_TO_FILE="1"
+export LOG_FILE="logs/voice.log"
+export PORT="3000"
 export ASR_PROVIDER="volc"
 export TTS_PROVIDER="volc"
 

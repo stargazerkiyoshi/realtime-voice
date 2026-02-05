@@ -2,7 +2,11 @@
 # Example env setup for local dev. Copy to start.local.sh and fill secrets.
 set -euo pipefail
 
+
 export PORT="3000"
+export DEBUG_VOICE="1"
+export LOG_TO_FILE="1"
+export LOG_FILE="logs/voice.log"
 export ASR_PROVIDER="volc"
 export TTS_PROVIDER="volc"
 
