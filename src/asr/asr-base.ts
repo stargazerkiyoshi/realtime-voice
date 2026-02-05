@@ -6,7 +6,9 @@ export type { AsrProvider, AsrResult, AsrPartial, AsrFinal } from './types';
 function createAsrProvider(): AsrProvider {
   switch (config.asrProvider) {
     case 'volc':
-      return new VolcAsrClient();
+      return new VolcAsrClient({
+        idleMs: config.volcAsrIdleMs
+      });
     default:
       throw new Error(`Unsupported ASR provider: ${config.asrProvider}`);
   }
@@ -33,5 +35,18 @@ export class AsrClient {
 
   stream(): AsyncGenerator<AsrResult> {
     return this.provider.stream();
+  }
+
+  planClose() {
+    if (typeof (this.provider as any).planClose === 'function') {
+      (this.provider as any).planClose();
+    }
+  }
+
+  isPlannedClose() {
+    if (typeof (this.provider as any).isPlannedClose === 'function') {
+      return (this.provider as any).isPlannedClose();
+    }
+    return false;
   }
 }

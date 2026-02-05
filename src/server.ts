@@ -6,7 +6,10 @@ import { logger } from './observability/logger';
 const server = Fastify({ logger: true });
 
 async function start() {
-  logger.info('=== realtime-voice start ===');
+  logger.info(`
+    ============================
+    === realtime-voice start ===
+    ============================`);
   logger.info({ DEBUG_VOICE: process.env.DEBUG_VOICE ?? '(unset)' }, 'voice debug logger config');
   await server.register(websocket);
 
