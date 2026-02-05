@@ -4,20 +4,24 @@
   private frameBytes: number;
   private startThreshold: number;
   private endSilenceFrames: number;
+  private maxSpeechFrames: number;
   private inSpeech = false;
   private silenceCount = 0;
+  private speechFrames = 0;
 
   constructor(
     sampleRate = 16000,
     frameMs = 20,
     startThreshold = 0.02,
-    endSilenceMs = 300
+    endSilenceMs = 300,
+    maxSpeechMs = 8000
   ) {
     this.sampleRate = sampleRate;
     this.frameMs = frameMs;
     this.frameBytes = Math.floor(sampleRate * (frameMs / 1000)) * 2;
     this.startThreshold = startThreshold;
     this.endSilenceFrames = Math.max(1, Math.floor(endSilenceMs / frameMs));
+    this.maxSpeechFrames = Math.max(1, Math.floor(maxSpeechMs / frameMs));
   }
 
   process(pcm16: Buffer): string[] {
@@ -30,14 +34,25 @@
         if (rms >= this.startThreshold) {
           this.inSpeech = true;
           this.silenceCount = 0;
+          this.speechFrames = 0;
           events.push('speech_start');
         }
       } else {
+        this.speechFrames += 1;
+        if (this.speechFrames >= this.maxSpeechFrames) {
+          // Force an end to avoid hanging forever when silence is not detected.
+          this.inSpeech = false;
+          this.silenceCount = 0;
+          this.speechFrames = 0;
+          events.push('speech_end');
+          continue;
+        }
         if (rms < this.startThreshold * 0.6) {
           this.silenceCount += 1;
           if (this.silenceCount >= this.endSilenceFrames) {
             this.inSpeech = false;
             this.silenceCount = 0;
+            this.speechFrames = 0;
             events.push('speech_end');
           }
         } else {
