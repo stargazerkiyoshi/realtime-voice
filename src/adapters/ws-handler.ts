@@ -52,6 +52,15 @@ export function wsHandler(socket: WebSocket) {
 
       if (t === 'ping') {
         await sendJson({ type: 'pong', ts_ms: nowMs() });
+        return;
+      }
+
+      if (t === 'close_mic') {
+        if (session) {
+          logger.info('ws close mic', { sid: session.sessionId });
+          await session.handleMicClose();
+        }
+        return;
       }
     } catch (e) {
       logger.error('ws handler error', e);

@@ -106,6 +106,7 @@ export class Session {
           });
         }
         await this.sendJson({ type: 'end', reason: (e.data as any).reason ?? 'ended' });
+        if (typeof this.asr.planClose === 'function') this.asr.planClose();
         await this.asr.close();
         await this.tts.close();
         break;
@@ -307,6 +308,7 @@ export class Session {
     this.asrRestarting = true;
     logger.info('asr restart begin', { sid: this.sessionId });
     try {
+      if (typeof this.asr.planClose === 'function') this.asr.planClose();
       await this.asr.close();
       if (this.asrTask) {
         await this.asrTask;
@@ -316,5 +318,10 @@ export class Session {
     } finally {
       this.asrRestarting = false;
     }
+  }
+
+  async handleMicClose() {
+    logger.info('session mic close', { sid: this.sessionId });
+    await this.restartAsrForNextTurn();
   }
 }
