@@ -3,3 +3,4 @@ node_modules
 scripts/start.local.ps1
 scripts/start.local.sh
 logs/
+dist/
