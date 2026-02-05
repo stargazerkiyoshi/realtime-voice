@@ -366,6 +366,10 @@ export class VolcAsrClient implements AsrProvider {
     return this.plannedIdleClose;
   }
 
+  planClose() {
+    this.plannedIdleClose = true;
+  }
+
   async *stream(): AsyncGenerator<AsrPartial | AsrFinal> {
     await this.connect();
     while (!this.closing) {
