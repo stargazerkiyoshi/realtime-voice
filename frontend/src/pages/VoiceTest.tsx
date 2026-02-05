@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Alert, Button, Card, Divider, Input, Space, Tag, Typography } from 'antd';
+import { Alert, Button, Card, Collapse, Divider, Input, Space, Tag, Typography } from 'antd';
 import { useAppStore } from '../store/appStore';
 
 const { Text } = Typography;
@@ -78,8 +78,10 @@ export default function VoiceTest() {
   const [latestAssistant, setLatestAssistant] = useState('');
   const [errorText, setErrorText] = useState('');
   const [logs, setLogs] = useState<string[]>([]);
+  const [logsExpanded, setLogsExpanded] = useState(false);
   const [micRms, setMicRms] = useState(0);
   const [zeroChunks, setZeroChunks] = useState(0);
+  const [dialog, setDialog] = useState<Array<{ role: 'user' | 'assistant'; text: string }>>([]);
 
   const wsRef = useRef<WebSocket | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
@@ -90,10 +92,26 @@ export default function VoiceTest() {
   const playCtxRef = useRef<AudioContext | null>(null);
   const nextPlayTsRef = useRef(0);
 
+  // Ensure we have an AudioContext that is allowed to play; browsers often start in "suspended" state
+  const getPlayableCtx = async (): Promise<AudioContext> => {
+    const playCtx = playCtxRef.current ?? new AudioContext();
+    playCtxRef.current = playCtx;
+    if (playCtx.state === 'suspended') {
+      try {
+        await playCtx.resume();
+      } catch (err) {
+        log(`AudioContext resume failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    return playCtx;
+  };
+
   const log = (msg: string) => {
     const ts = new Date().toISOString().slice(11, 19);
     setLogs((prev) => [...prev, `[${ts}] ${msg}`].slice(-LOG_LIMIT));
   };
+
+  const clearLogs = () => setLogs([]);
 
   const summarizeOutbound = (payload: Record<string, unknown>) => {
     if (payload.type === 'audio' && typeof payload.payload_b64 === 'string') {
@@ -157,7 +175,7 @@ export default function VoiceTest() {
       log('WebSocket connected');
     };
 
-    ws.onmessage = (ev) => {
+    ws.onmessage = async (ev) => {
       const dataText = typeof ev.data === 'string' ? ev.data : '[binary]';
       log(`<= ${dataText}`);
 
@@ -174,10 +192,25 @@ export default function VoiceTest() {
           const text = String(msg.text ?? '');
           const isFinal = Boolean(msg.is_final);
           setLatestAsr(isFinal ? `[final] ${text}` : `[partial] ${text}`);
+          if (isFinal) {
+            setLatestAssistant('');
+            setDialog((prev) => [...prev, { role: 'user', text }]);
+          }
           return;
         }
+        // ignore vad for uplink gating; backend handles turn boundaries
         if (type === 'assistant') {
-          setLatestAssistant(String(msg.text ?? ''));
+          const delta = String(msg.text ?? '');
+          setLatestAssistant((prev) => prev + delta);
+          setDialog((prev) => {
+            const last = prev[prev.length - 1];
+            if (last && last.role === 'assistant') {
+              const updated = [...prev];
+              updated[updated.length - 1] = { role: 'assistant', text: last.text + delta };
+              return updated;
+            }
+            return [...prev, { role: 'assistant', text: delta }];
+          });
           return;
         }
         if (type === 'error') {
@@ -186,8 +219,7 @@ export default function VoiceTest() {
         }
         if (type === 'tts' && typeof msg.payload_b64 === 'string') {
           const pcm16 = base64ToInt16Array(msg.payload_b64);
-          const playCtx = playCtxRef.current ?? new AudioContext();
-          playCtxRef.current = playCtx;
+          const playCtx = await getPlayableCtx();
 
           const samples = new Float32Array(pcm16.length);
           for (let i = 0; i < pcm16.length; i += 1) {
@@ -224,6 +256,9 @@ export default function VoiceTest() {
   };
 
   const disconnect = () => {
+    setDialog([]);
+    setLatestAssistant('');
+    setLatestAsr('');
     clearMic();
     closeWs();
   };
@@ -238,6 +273,8 @@ export default function VoiceTest() {
     const payload: Record<string, unknown> = { type: 'start' };
     if (sessionId.trim()) payload.session_id = sessionId.trim();
     send(payload);
+    // pre-warm/resume audio context right after a user gesture (button click)
+    void getPlayableCtx();
   };
 
   const stopSession = () => {
@@ -248,12 +285,15 @@ export default function VoiceTest() {
   const startMic = async () => {
     if (!sessionStarted || capturing) return;
     try {
+      // resume playback context on user gesture to avoid autoplay restrictions
+      await getPlayableCtx();
+
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
-          echoCancellation: false,
-          noiseSuppression: false,
-          autoGainControl: false
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
         }
       });
 
@@ -311,7 +351,7 @@ export default function VoiceTest() {
   };
 
   return (
-    <Card title="Voice Test" bordered style={{ background: '#111827', color: '#e6edf3' }}>
+    <Card title="Voice Test" bordered style={{ background: '#fff', color: '#141414' }}>
       <Space direction="vertical" size="middle" style={{ width: '100%' }}>
         {errorText ? <Alert type="error" showIcon message={errorText} /> : null}
 
@@ -350,35 +390,88 @@ export default function VoiceTest() {
           <Tag color={zeroChunks > 20 ? 'red' : 'default'}>Zero Chunks: {zeroChunks}</Tag>
         </Space>
 
-        <Divider style={{ borderColor: '#1f2937', margin: '8px 0' }} />
+        <Divider style={{ margin: '8px 0' }} />
 
-        <Card size="small" title="ASR" style={{ background: '#0b1222', borderColor: '#1f2937' }}>
-          <Text style={{ color: '#cbd5f5' }}>{latestAsr || 'N/A'}</Text>
+        <Card size="small" title="ASR">
+          <Text>{latestAsr || 'N/A'}</Text>
         </Card>
 
-        <Card size="small" title="Assistant" style={{ background: '#0b1222', borderColor: '#1f2937' }}>
-          <Text style={{ color: '#cbd5f5' }}>{latestAssistant || 'N/A'}</Text>
+        <Card size="small" title="Assistant">
+          <Text>{latestAssistant || 'N/A'}</Text>
         </Card>
 
-        <div
-          style={{
-            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace',
-            fontSize: 12,
-            background: '#0b1222',
-            border: '1px solid #1f2937',
-            borderRadius: 8,
-            padding: 12,
-            height: 280,
-            overflow: 'auto',
-            whiteSpace: 'pre-wrap'
-          }}
+        <Card size="small" title="对话记录" bodyStyle={{ padding: 12 }}>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: '1fr 1fr',
+              gap: 12
+            }}
+          >
+            <div style={{ color: '#1677ff' }}>助手</div>
+            <div style={{ color: '#faad14', textAlign: 'right' }}>用户</div>
+            {dialog.map((m, idx) => (
+              <div
+                key={`${m.role}-${idx}`}
+                style={{
+                  gridColumn: m.role === 'assistant' ? '1 / 2' : '2 / 3',
+                  textAlign: m.role === 'assistant' ? 'left' : 'right',
+                  background: '#f5f5f5',
+                  border: '1px solid #d9d9d9',
+                  borderRadius: 8,
+                  padding: '8px 10px',
+                  color: '#141414',
+                  whiteSpace: 'pre-wrap'
+                }}
+              >
+                {m.text || '(空)'}
+              </div>
+            ))}
+          </div>
+        </Card>
+
+        <Space align="center" style={{ width: '100%', justifyContent: 'space-between' }}>
+          <Space>
+            <Button onClick={() => setLogsExpanded((v) => !v)} size="small">
+              {logsExpanded ? '收起日志' : '展开日志'}
+            </Button>
+            <Button onClick={clearLogs} size="small" disabled={logs.length === 0}>
+              清空日志
+            </Button>
+          </Space>
+          <Tag color="default">最多保留 {LOG_LIMIT} 条</Tag>
+        </Space>
+
+        <Collapse
+          activeKey={logsExpanded ? ['logs'] : []}
+          onChange={(keys) => setLogsExpanded(keys.length > 0)}
         >
-          {logs.map((l, i) => (
-            <div key={i} style={{ color: '#cbd5f5' }}>
-              {l}
+          <Collapse.Panel key="logs" header="调试日志">
+            <div
+              style={{
+                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace',
+                fontSize: 12,
+                background: '#f5f5f5',
+                border: '1px solid #d9d9d9',
+                borderRadius: 8,
+                padding: 12,
+                maxHeight: 280,
+                overflow: 'auto',
+                whiteSpace: 'pre-wrap'
+              }}
+            >
+              {logs.length === 0 ? (
+                <div style={{ color: '#8c8c8c' }}>暂无日志</div>
+              ) : (
+                logs.map((l, i) => (
+                  <div key={i} style={{ color: '#141414' }}>
+                    {l}
+                  </div>
+                ))
+              )}
             </div>
-          ))}
-        </div>
+          </Collapse.Panel>
+        </Collapse>
       </Space>
     </Card>
   );
