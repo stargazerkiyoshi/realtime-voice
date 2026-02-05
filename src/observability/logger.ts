@@ -47,7 +47,8 @@ function writeFileLog(level: Level, args: unknown[]) {
     mkdirSync(dirname(logFile), { recursive: true });
     fileReady = true;
   }
-  const ts = new Date().toISOString();
+  const ts = localTs();
+  const tag = color(level);
   const msg = args
     .map((v) => {
       if (typeof v === 'string') return v;
@@ -58,7 +59,7 @@ function writeFileLog(level: Level, args: unknown[]) {
       }
     })
     .join(' ');
-  appendFileSync(logFile, `[${ts}] [${level}] ${msg}\n`, 'utf8');
+  appendFileSync(logFile, `[${ts}] ${tag} ${msg}\n`, 'utf8');
 }
 
 export const logger = {
