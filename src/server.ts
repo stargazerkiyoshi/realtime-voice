@@ -5,6 +5,7 @@ import { wsHandler } from './adapters/ws-handler';
 const server = Fastify({ logger: true });
 
 async function start() {
+  server.log.info({ DEBUG_VOICE: process.env.DEBUG_VOICE ?? '(unset)' }, 'voice debug logger config');
   await server.register(websocket);
 
   server.get('/ws/voice', { websocket: true }, (socket, _req) => {
