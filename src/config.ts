@@ -1,6 +1,10 @@
 export type Config = {
   asrProvider: 'volc';
   ttsProvider: 'volc';
+  enableBargeIn: boolean;
+  // VAD controls
+  enableBackendVad: boolean; // whether server-side VAD gates audio before ASR
+  expectFrontendVad: boolean; // hint that frontend may already gate/stop audio
   // Volc ASR v3 sauc/bigmodel_* headers
   volcAppKey?: string;
   volcAccessKey?: string;
@@ -13,6 +17,9 @@ export type Config = {
   volcVoiceType: string;
   volcSampleRate: number;
   volcTtsModel?: string;
+  volcAsrIdleMs?: number;
+  maxUtterMs?: number;
+  silenceToHangupMs?: number;
   openaiApiKey?: string;
   openaiBaseUrl?: string;
   openaiModel: string;
@@ -42,6 +49,9 @@ function resolveTtsProvider(): Config['ttsProvider'] {
 export const config: Config = {
   asrProvider: resolveAsrProvider(),
   ttsProvider: resolveTtsProvider(),
+  enableBargeIn: String(process.env.ENABLE_BARGE_IN ?? 'false').toLowerCase() === 'true',
+  enableBackendVad: String(process.env.ENABLE_BACKEND_VAD ?? 'true').toLowerCase() === 'true',
+  expectFrontendVad: String(process.env.EXPECT_FRONTEND_VAD ?? 'false').toLowerCase() === 'true',
   volcAppKey: process.env.VOLC_APP_KEY,
   volcAccessKey: process.env.VOLC_ACCESS_KEY,
   volcAsrResourceId: process.env.VOLC_ASR_RESOURCE_ID,
@@ -54,6 +64,9 @@ export const config: Config = {
   volcVoiceType: process.env.VOLC_VOICE_TYPE ?? 'BV700_V2_streaming',
   volcSampleRate: Number(process.env.VOLC_SAMPLE_RATE ?? 24000),
   volcTtsModel: process.env.VOLC_TTS_MODEL,
+  volcAsrIdleMs: process.env.VOLC_ASR_IDLE_MS ? Number(process.env.VOLC_ASR_IDLE_MS) : undefined,
+  maxUtterMs: process.env.MAX_UTTER_MS ? Number(process.env.MAX_UTTER_MS) : undefined,
+  silenceToHangupMs: process.env.SILENCE_TO_HANGUP_MS ? Number(process.env.SILENCE_TO_HANGUP_MS) : undefined,
   openaiApiKey: process.env.OPENAI_API_KEY,
   openaiBaseUrl: process.env.OPENAI_BASE_URL,
   openaiModel: process.env.OPENAI_MODEL ?? 'gpt-4.1-mini'

@@ -10,6 +10,45 @@
 - 工具框架占位（`hangup`/`send_notification`）
 - 前端测试台（Vite + React + Ant Design，支持麦克风采集与TTS播放）
 
+## 前端采集与音频建议
+- 采集：`getUserMedia` 开启 `echoCancellation: true`, `noiseSuppression: true`, `autoGainControl: true`, `channelCount: 1`，采样率与服务端保持 24k（默认）或 16k 一致。
+- 音频处理：推荐用 AudioWorklet 做重采样/增益/可选前端 VAD；示例骨架：
+
+  ```ts
+  // main thread
+  await audioContext.audioWorklet.addModule('worklets/mic-processor.js');
+  const source = audioContext.createMediaStreamSource(stream);
+  const node = new AudioWorkletNode(audioContext, 'mic-processor', { numberOfInputs: 1, numberOfOutputs: 1 });
+  source.connect(node).connect(audioContext.destination); // destination 仅为 keep-alive，可替换为自定义处理
+  node.port.onmessage = ({ data }) => {
+    if (data.type === 'pcm') ws.send(/* pcm16 buffer */);
+    if (data.type === 'vad') {/* 前端 VAD 结果可用于暂停推流 */}
+  };
+  ```
+
+  ```js
+  // worklets/mic-processor.js
+  class MicProcessor extends AudioWorkletProcessor {
+    process(inputs) {
+      const pcm = inputs[0][0];
+      // TODO: 下行重采样/量化为 Int16，必要时做前端 VAD，静音时不 postMessage
+      this.port.postMessage({ type: 'pcm', pcm });
+      return true;
+    }
+  }
+  registerProcessor('mic-processor', MicProcessor);
+  ```
+
+- 双 VAD 配置矩阵（通过环境变量控制）：
+
+  | 组合 | 前端 VAD | 后端 VAD (`ENABLE_BACKEND_VAD`) | 适用场景 |
+  | --- | --- | --- | --- |
+  | 默认 | 关闭/无 | 开启 | 简单集成，后端负责 gating，容忍轻噪声 |
+  | 前端+后端 | 开启 | 开启 | 双重保护，低带宽/噪声环境，前端静音时暂停推流 |
+  | 仅前端 | 开启 | 关闭 | 做实验对比 ASR/费用；后端直通 ASR |
+
+- 回声消除/降噪请尽量在前端完成（有扬声器参考信号，效果最佳）；后端不做 AEC，仅做 VAD gating。
+
 ## 目录结构
 ```
 src/

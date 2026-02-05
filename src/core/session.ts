@@ -11,6 +11,7 @@ import { PlaybackQueue } from '../tts/playback';
 import { AsrClient } from '../asr/asr-base';
 import { config } from '../config';
 import { logger } from '../observability/logger';
+import { TurnManager } from './turn-manager';
 
 const nowMs = () => Date.now();
 
@@ -24,7 +25,8 @@ export class Session {
   private fsm = new FSM();
   private ctx = new ConversationContext();
 
-  private vad = new SimpleEnergyVAD();
+  // Use 10ms frames to align with frontend worklet output (160 samples @16k).
+  private vad = new SimpleEnergyVAD(16000, 10);
   private llm = new LLMClient();
   private tts = new TTSClient();
   private chunker = new Chunker();
@@ -32,13 +34,27 @@ export class Session {
 
   private playback = new PlaybackQueue();
   private barge = new BargeInController(this.playback);
+  private bargeEnabled = config.enableBargeIn;
+  private speechActive = false; // true between vad speech_start and speech_end
+  private backendVadEnabled = config.enableBackendVad;
+  private turn = new TurnManager({
+    idleMs: config.volcAsrIdleMs,
+    maxUtterMs: config.maxUtterMs,
+    onIdleTimeout: async () => {
+      await this.emitFinalFromTurn();
+      await this.restartAsrForNextTurn();
+    },
+    onMaxUtterTimeout: async () => {
+      await this.emitFinalFromTurn();
+      await this.restartAsrForNextTurn();
+    }
+  });
 
   private playbackTask: Promise<void> | null = null;
   private runnerTask: Promise<void> | null = null;
   private asrTask: Promise<void> | null = null;
   private asrRestarting = false;
 
-  private turnPcm = Buffer.alloc(0);
   private audioInPackets = 0;
   private asrPartials = 0;
   private ttsChunks = 0;
@@ -62,6 +78,10 @@ export class Session {
   }
 
   async feedAudio(pcm16: Buffer, tsMs: number) {
+    if (!this.bargeEnabled && this.fsm.state === State.SPEAKING) {
+      // 在顺序对话模式下，播放期间不处理上行音频，避免 TTS 回录触发 ASR
+      return;
+    }
     this.audioInPackets += 1;
     if (this.audioInPackets % 20 === 0) {
       logger.debug('session audio in', { sid: this.sessionId, packets: this.audioInPackets, bytes: pcm16.length });
@@ -94,6 +114,25 @@ export class Session {
     while (this.fsm.state !== State.ENDED) {
       const e = await this.bus.next();
 
+      // LLM token / done must be processed regardless of current FSM state
+      // to avoid dropping streamed content after we start speaking.
+      if (e.type === 'LLM_TOKEN') {
+        const chunks = this.chunker.push((e.data as any).delta as string);
+        for (const c of chunks) {
+          await this.bus.emit({ type: 'ASSISTANT_CHUNK', data: { text: c }, ts_ms: nowMs() });
+        }
+        continue;
+      }
+      if (e.type === 'LLM_DONE') {
+        for (const c of this.chunker.flush()) {
+          await this.bus.emit({ type: 'ASSISTANT_CHUNK', data: { text: c }, ts_ms: nowMs() });
+        }
+        if (this.fsm.state === State.THINKING) {
+          this.fsm.state = State.LISTENING;
+        }
+        continue;
+      }
+
       if (e.type === 'SESSION_END_REQUEST' || e.type === 'REMOTE_HANGUP' || e.type === 'ERROR') {
         logger.info('session ending', { sid: this.sessionId, event: e.type, data: e.data });
         this.barge.interrupt();
@@ -115,20 +154,37 @@ export class Session {
       if (this.fsm.state === State.LISTENING) {
         if (e.type === 'AUDIO_IN') {
           const pcm16 = (e.data as any).pcm16 as Buffer;
-          this.turnPcm = Buffer.concat([this.turnPcm, pcm16]);
+          this.turn.recordAudio(pcm16);
+
+          let vadStarted = false;
+          if (this.backendVadEnabled) {
+            for (const ev of this.vad.process(pcm16)) {
+              if (ev === 'speech_start') {
+                vadStarted = true;
+                this.speechActive = true;
+                await this.sendJson({ type: 'vad', event: 'speech_start', ts_ms: e.ts_ms });
+                this.turn.onSpeechStart();
+            } else if (ev === 'speech_end') {
+              this.speechActive = false;
+              await this.sendJson({ type: 'vad', event: 'speech_end', ts_ms: e.ts_ms });
+              this.turn.onSpeechEnd();
+              // Signal ASR to finish the current utterance; let the provider close after idle
+              // so it can deliver final results before restart.
+              if (typeof this.asr.planClose === 'function') this.asr.planClose();
+            }
+          }
+          } else {
+            // 后端 VAD 关闭时，认为始终在语音段内，直接送 ASR
+            this.speechActive = true;
+          }
 
           if (!this.asrTask) {
             this.asrTask = this.asrLoop();
           }
-          await this.asr.feed(pcm16);
 
-          for (const ev of this.vad.process(pcm16)) {
-            if (ev === 'speech_start') {
-              await this.sendJson({ type: 'vad', event: 'speech_start', ts_ms: e.ts_ms });
-            } else if (ev === 'speech_end') {
-              await this.sendJson({ type: 'vad', event: 'speech_end', ts_ms: e.ts_ms });
-              await this.restartAsrForNextTurn();
-            }
+          // 仅在 VAD 判断为语音段内才把音频送去 ASR，避免噪声持续占用链路。
+          if (this.speechActive || vadStarted) {
+            await this.asr.feed(pcm16);
           }
         } else if (e.type === 'ASR_PARTIAL') {
           this.asrPartials += 1;
@@ -137,6 +193,7 @@ export class Session {
           }
           const text = (e.data as any).text as string;
           const confidence = (e.data as any).confidence as number | undefined;
+          this.turn.onPartial(text);
           await this.sendJson({ type: 'asr', is_final: false, text, confidence, ts_ms: e.ts_ms });
         } else if (e.type === 'ASR_FINAL') {
           logger.info('asr final', { sid: this.sessionId, text: (e.data as any).text });
@@ -148,6 +205,7 @@ export class Session {
 
           this.ctx.turnId += 1;
           this.ctx.history.push({ role: 'user', content: text });
+          this.turn.onFinal();
 
           this.fsm.state = State.THINKING;
 
@@ -170,15 +228,10 @@ export class Session {
           this.barge.bindControllers(llmAbort, ttsAbort);
         }
       } else if (this.fsm.state === State.THINKING) {
-        if (e.type === 'LLM_TOKEN') {
-          const chunks = this.chunker.push((e.data as any).delta as string);
-          for (const c of chunks) {
-            await this.bus.emit({ type: 'ASSISTANT_CHUNK', data: { text: c }, ts_ms: nowMs() });
-          }
-        } else if (e.type === 'ASSISTANT_CHUNK') {
+        if (e.type === 'ASSISTANT_CHUNK') {
           const text = (e.data as any).text as string;
           logger.info('assistant chunk', { sid: this.sessionId, len: text.length });
-          await this.sendJson({ type: 'assistant', text });
+        await this.sendJson({ type: 'assistant', text });
 
           this.fsm.state = State.SPEAKING;
           this.playback.resume();
@@ -199,22 +252,17 @@ export class Session {
             }
           };
           void runTTS();
-          this.barge.bindControllers(llmAbort, ttsAbort);
-        } else if (e.type === 'LLM_DONE') {
-          for (const c of this.chunker.flush()) {
-            await this.bus.emit({ type: 'ASSISTANT_CHUNK', data: { text: c }, ts_ms: nowMs() });
-          }
-          if (this.fsm.state === State.THINKING) {
-            this.fsm.state = State.LISTENING;
-          }
+          if (this.bargeEnabled) this.barge.bindControllers(llmAbort, ttsAbort);
         }
       } else if (this.fsm.state === State.SPEAKING) {
         if (e.type === 'AUDIO_IN') {
           const pcm16 = (e.data as any).pcm16 as Buffer;
-          for (const ev of this.vad.process(pcm16)) {
-            if (ev === 'speech_start') {
-              await this.bus.emit({ type: 'BARGE_IN', data: {}, ts_ms: nowMs() });
-              break;
+          if (this.bargeEnabled) {
+            for (const ev of this.vad.process(pcm16)) {
+              if (ev === 'speech_start') {
+                await this.bus.emit({ type: 'BARGE_IN', data: {}, ts_ms: nowMs() });
+                break;
+              }
             }
           }
         } else if (e.type === 'ASSISTANT_CHUNK') {
@@ -235,20 +283,22 @@ export class Session {
             }
           };
           void runTTS();
-          this.barge.bindControllers(llmAbort, ttsAbort);
+          if (this.bargeEnabled) this.barge.bindControllers(llmAbort, ttsAbort);
         } else if (e.type === 'BARGE_IN') {
-          await this.sendJson({ type: 'barge_in' });
-          this.barge.interrupt();
-          this.playback.resume();
-          this.chunker.flush();
-          this.fsm.state = State.LISTENING;
-          this.turnPcm = Buffer.alloc(0);
-          llmAbort = null;
-          ttsAbort = null;
+          if (this.bargeEnabled) {
+            await this.sendJson({ type: 'barge_in' });
+            this.barge.interrupt();
+            this.playback.resume();
+            this.chunker.flush();
+            this.fsm.state = State.LISTENING;
+            this.turn.reset();
+            llmAbort = null;
+            ttsAbort = null;
+          }
         } else if (e.type === 'TTS_DONE') {
           // Playback will still drain any queued audio; we switch to listening for the next turn.
           this.fsm.state = State.LISTENING;
-          this.turnPcm = Buffer.alloc(0);
+          this.turn.reset();
           llmAbort = null;
           ttsAbort = null;
         }
@@ -279,7 +329,8 @@ export class Session {
           return;
         }
         if (typeof this.asr.isPlannedClose === 'function' && this.asr.isPlannedClose()) {
-          logger.info('asr loop ended after idle close', { sid: this.sessionId });
+          logger.info('asr loop ended after planned close', { sid: this.sessionId });
+          await this.emitFinalFromTurn(true);
           await this.restartAsrForNextTurn();
           return;
         }
@@ -314,6 +365,7 @@ export class Session {
   private async restartAsrForNextTurn() {
     if (this.asrRestarting || this.fsm.state === State.ENDED) return;
     this.asrRestarting = true;
+    this.speechActive = false;
     logger.info('asr restart begin', { sid: this.sessionId });
     try {
       if (typeof this.asr.planClose === 'function') this.asr.planClose();
@@ -322,6 +374,7 @@ export class Session {
         await this.asrTask;
       }
       this.asr = new AsrClient();
+      this.turn.reset();
       logger.info('asr restart complete', { sid: this.sessionId });
     } finally {
       this.asrRestarting = false;
@@ -331,5 +384,18 @@ export class Session {
   async handleMicClose() {
     logger.info('session mic close', { sid: this.sessionId });
     await this.restartAsrForNextTurn();
+  }
+
+  private async emitFinalFromTurn(force = false) {
+    if (this.fsm.state !== State.LISTENING || this.fsm.state === State.ENDED) return;
+    const text = this.turn.getLastPartial();
+    if (!force && !text) return;
+    if ((text ?? '').trim().length === 0) return;
+    logger.info('turn timeout emitting final', { sid: this.sessionId, textLen: text.length, force });
+    await this.bus.emit({
+      type: 'ASR_FINAL',
+      data: { text },
+      ts_ms: nowMs()
+    });
   }
 }

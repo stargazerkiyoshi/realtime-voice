@@ -8,46 +8,6 @@ const ASR_SAMPLE_RATE = 16000;
 const TTS_SAMPLE_RATE = 24000;
 const LOG_LIMIT = 300;
 
-function downsampleTo16k(input: Float32Array, inputRate: number): Int16Array {
-  if (inputRate === ASR_SAMPLE_RATE) {
-    const out = new Int16Array(input.length);
-    for (let i = 0; i < input.length; i += 1) {
-      const s = Math.max(-1, Math.min(1, input[i]));
-      out[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
-    }
-    return out;
-  }
-
-  const ratio = inputRate / ASR_SAMPLE_RATE;
-  const outLen = Math.max(1, Math.floor(input.length / ratio));
-  const out = new Int16Array(outLen);
-  let pos = 0;
-
-  for (let i = 0; i < outLen; i += 1) {
-    const nextPos = Math.floor((i + 1) * ratio);
-    let sum = 0;
-    let count = 0;
-    for (let j = pos; j < nextPos && j < input.length; j += 1) {
-      sum += input[j];
-      count += 1;
-    }
-    pos = nextPos;
-    const avg = count > 0 ? sum / count : 0;
-    const s = Math.max(-1, Math.min(1, avg));
-    out[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
-  }
-  return out;
-}
-
-function calcRms(input: Float32Array): number {
-  if (input.length === 0) return 0;
-  let sum = 0;
-  for (let i = 0; i < input.length; i += 1) {
-    sum += input[i] * input[i];
-  }
-  return Math.sqrt(sum / input.length);
-}
-
 function int16ToBase64(pcm16: Int16Array): string {
   const bytes = new Uint8Array(pcm16.buffer, pcm16.byteOffset, pcm16.byteLength);
   let binary = '';
@@ -88,6 +48,8 @@ export default function VoiceTest() {
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const micSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
+  const workletNodeRef = useRef<AudioWorkletNode | null>(null);
+  const frontendVadRef = useRef<{ speech: boolean }>({ speech: false });
 
   const playCtxRef = useRef<AudioContext | null>(null);
   const nextPlayTsRef = useRef(0);
@@ -132,9 +94,11 @@ export default function VoiceTest() {
   const clearMic = () => {
     processorRef.current?.disconnect();
     micSourceRef.current?.disconnect();
+    workletNodeRef.current?.disconnect();
     mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
     processorRef.current = null;
     micSourceRef.current = null;
+    workletNodeRef.current = null;
     mediaStreamRef.current = null;
     if (audioCtxRef.current) {
       void audioCtxRef.current.close();
@@ -298,16 +262,39 @@ export default function VoiceTest() {
       });
 
       const audioCtx = new AudioContext();
+      await audioCtx.audioWorklet.addModule('/worklets/mic-processor.js');
+
       const micSource = audioCtx.createMediaStreamSource(stream);
-      const processor = audioCtx.createScriptProcessor(4096, 1, 1);
+      const worklet = new AudioWorkletNode(audioCtx, 'mic-processor', {
+        numberOfInputs: 1,
+        numberOfOutputs: 0,
+        processorOptions: {
+          targetSampleRate: ASR_SAMPLE_RATE,
+          vadStartThresh: 2e-4,
+          vadStopThresh: 1e-4,
+          vadHangFrames: 6
+        }
+      });
 
-      processor.onaudioprocess = (event) => {
+      worklet.port.onmessage = (event) => {
+        const { type, buffer, rms, event: vadEvent } = event.data as {
+          type: string;
+          buffer?: ArrayBuffer;
+          rms?: number;
+          event?: 'speech_start' | 'speech_end';
+        };
+
+        if (type === 'vad' && vadEvent) {
+          frontendVadRef.current.speech = vadEvent === 'speech_start';
+          setMicRms(rms ?? 0);
+          return;
+        }
+
+        if (type !== 'pcm' || !buffer) return;
+        setMicRms(rms ?? 0);
+
         if (!sessionStarted || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
-        const input = event.inputBuffer.getChannelData(0);
-        const rms = calcRms(input);
-        setMicRms(rms);
-
-        const pcm16 = downsampleTo16k(input, audioCtx.sampleRate);
+        const pcm16 = new Int16Array(buffer);
         if (pcm16.length === 0) return;
 
         let nonZero = false;
@@ -326,17 +313,16 @@ export default function VoiceTest() {
         });
       };
 
-      micSource.connect(processor);
-      processor.connect(audioCtx.destination);
+      micSource.connect(worklet);
 
       mediaStreamRef.current = stream;
       audioCtxRef.current = audioCtx;
       micSourceRef.current = micSource;
-      processorRef.current = processor;
+      workletNodeRef.current = worklet;
       setCapturing(true);
       setMicRms(0);
       setZeroChunks(0);
-      log(`Mic capture started: in=${audioCtx.sampleRate}Hz out=${ASR_SAMPLE_RATE}Hz`);
+      log(`Mic capture started (AudioWorklet): in=${audioCtx.sampleRate}Hz out=${ASR_SAMPLE_RATE}Hz`);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Cannot access microphone';
       setErrorText(message);
