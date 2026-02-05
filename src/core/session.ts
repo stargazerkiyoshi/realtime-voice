@@ -192,6 +192,7 @@ export class Session {
                 await this.playback.put(audio);
               }
               logger.info('tts stream done', { sid: this.sessionId });
+              await this.bus.emit({ type: 'TTS_DONE', data: {}, ts_ms: nowMs() });
             } catch {
               logger.warn('tts stream aborted', { sid: this.sessionId });
               return;
@@ -227,6 +228,7 @@ export class Session {
                 await this.playback.put(audio);
               }
               logger.info('tts append stream done', { sid: this.sessionId });
+              await this.bus.emit({ type: 'TTS_DONE', data: {}, ts_ms: nowMs() });
             } catch {
               logger.warn('tts append stream aborted', { sid: this.sessionId });
               return;
@@ -239,6 +241,12 @@ export class Session {
           this.barge.interrupt();
           this.playback.resume();
           this.chunker.flush();
+          this.fsm.state = State.LISTENING;
+          this.turnPcm = Buffer.alloc(0);
+          llmAbort = null;
+          ttsAbort = null;
+        } else if (e.type === 'TTS_DONE') {
+          // Playback will still drain any queued audio; we switch to listening for the next turn.
           this.fsm.state = State.LISTENING;
           this.turnPcm = Buffer.alloc(0);
           llmAbort = null;
