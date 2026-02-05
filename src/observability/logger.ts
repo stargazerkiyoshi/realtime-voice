@@ -48,7 +48,7 @@ function writeFileLog(level: Level, args: unknown[]) {
     fileReady = true;
   }
   const ts = localTs();
-  const tag = color(level);
+  const tag = `[${level}]`;
   const msg = args
     .map((v) => {
       if (typeof v === 'string') return v;
