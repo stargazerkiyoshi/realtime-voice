@@ -9,6 +9,7 @@
   | 'LLM_TOKEN'
   | 'LLM_DONE'
   | 'ASSISTANT_CHUNK'
+  | 'TTS_DONE'
   | 'TTS_AUDIO'
   | 'PLAYBACK_DRAINED'
   | 'BARGE_IN'
