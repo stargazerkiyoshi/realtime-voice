@@ -6,12 +6,26 @@ const fileEnabled = process.env.NODE_ENV === 'test' ? false : process.env.LOG_TO
 const logFile = process.env.LOG_FILE ?? 'logs/voice.log';
 let fileReady = false;
 
-function fmt(level: 'INFO' | 'WARN' | 'ERROR' | 'DEBUG', args: unknown[]) {
-  const ts = new Date().toISOString();
-  return [`[${ts}] [${level}]`, ...args];
+type Level = 'INFO' | 'WARN' | 'ERROR' | 'DEBUG';
+
+function color(level: Level) {
+  const reset = '\x1b[0m';
+  const colors: Record<Level, string> = {
+    INFO: '\x1b[34m', // blue
+    DEBUG: '\x1b[95m', // bright magenta
+    WARN: '\x1b[33m', // yellow
+    ERROR: '\x1b[31m' // red
+  };
+  return `${colors[level]}[${level}]${reset}`;
 }
 
-function writeFileLog(level: 'INFO' | 'WARN' | 'ERROR' | 'DEBUG', args: unknown[]) {
+function fmt(level: Level, args: unknown[]) {
+  const ts = new Date().toISOString();
+  const tag = color(level);
+  return [`[${ts}] ${tag}`, ...args];
+}
+
+function writeFileLog(level: Level, args: unknown[]) {
   if (!fileEnabled) return;
   if (!fileReady) {
     mkdirSync(dirname(logFile), { recursive: true });
