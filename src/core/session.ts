@@ -1,8 +1,5 @@
-﻿import { EventBus } from './event-bus';
-import type { Event } from './events';
-import { State, FSM } from './fsm';
+import { FSM, State } from './fsm';
 import { ConversationContext } from './context';
-import { BargeInController } from './barge-in';
 import { SimpleEnergyVAD } from '../audio/vad';
 import { LLMClient } from '../llm/llm-base';
 import { Chunker } from '../llm/chunker';
@@ -11,8 +8,8 @@ import { PlaybackQueue } from '../tts/playback';
 import { AsrClient } from '../asr/asr-base';
 import { config } from '../config';
 import { logger } from '../observability/logger';
-import { TurnManager } from './turn-manager';
 import { WavWriter } from '../audio/wav-writer';
+import { AsyncQueue } from './async-queue';
 import path from 'node:path';
 
 const nowMs = () => Date.now();
@@ -23,11 +20,9 @@ export class Session {
   sessionId: string;
   sendJson: SendJson;
 
-  private bus = new EventBus();
   private fsm = new FSM();
   private ctx = new ConversationContext();
 
-  // Use 10ms frames to align with frontend worklet output (160 samples @16k).
   private vad = new SimpleEnergyVAD(16000, 10);
   private llm = new LLMClient();
   private tts = new TTSClient();
@@ -35,27 +30,21 @@ export class Session {
   private asr = new AsrClient();
 
   private playback = new PlaybackQueue();
-  private barge = new BargeInController(this.playback);
-  private bargeEnabled = config.enableBargeIn;
-  private speechActive = false; // true between vad speech_start and speech_end
   private backendVadEnabled = config.enableBackendVad;
-  private turn = new TurnManager({
-    idleMs: config.volcAsrIdleMs,
-    maxUtterMs: config.maxUtterMs,
-    onIdleTimeout: async () => {
-      await this.emitFinalFromTurn();
-      await this.restartAsrForNextTurn();
-    },
-    onMaxUtterTimeout: async () => {
-      await this.emitFinalFromTurn();
-      await this.restartAsrForNextTurn();
-    }
-  });
+  private bargeEnabled = config.enableBargeIn;
+  private speechActive = false;
+  private vadEndTimer: NodeJS.Timeout | null = null;
+  private vadEndMs = 600;
+  private asrClosing = false;
 
-  private playbackTask: Promise<void> | null = null;
-  private runnerTask: Promise<void> | null = null;
+  private inputQueue = new AsyncQueue<{ pcm16: Buffer; tsMs: number }>();
+  private inputTask: Promise<void> | null = null;
   private asrTask: Promise<void> | null = null;
-  private asrRestarting = false;
+  private playbackTask: Promise<void> | null = null;
+
+  private llmAbort: AbortController | null = null;
+  private ttsAbort: AbortController | null = null;
+  private assistantRunId = 0;
 
   private audioInPackets = 0;
   private asrPartials = 0;
@@ -74,12 +63,24 @@ export class Session {
     this.fsm.state = State.LISTENING;
     await this.startRecording();
     this.playbackTask = this.playbackLoop();
-    this.runnerTask = this.eventLoop();
+    this.inputTask = this.inputLoop();
   }
 
   async stop(reason = 'stop') {
+    if (this.fsm.state === State.ENDED) return;
     logger.info('session stop requested', { sid: this.sessionId, reason });
-    await this.bus.emit({ type: 'SESSION_END_REQUEST', data: { reason }, ts_ms: nowMs() });
+    this.fsm.state = State.ENDED;
+    this.clearVadEndTimer();
+    this.interruptAssistant('session_end');
+    try {
+      await this.sendJson({ type: 'end', reason });
+    } catch {
+      // ignore send failures during shutdown
+    }
+    if (typeof this.asr.planClose === 'function') this.asr.planClose();
+    await this.asr.close();
+    await this.tts.close();
+    await this.stopRecording();
   }
 
   async feedAudio(pcm16: Buffer, tsMs: number) {
@@ -87,6 +88,8 @@ export class Session {
       // 在顺序对话模式下，播放期间不处理上行音频，避免 TTS 回录触发 ASR
       return;
     }
+    if (this.fsm.state === State.ENDED) return;
+
     this.audioInPackets += 1;
     if (this.wavWriter) {
       try {
@@ -108,7 +111,186 @@ export class Session {
         zero_pct: samples > 0 ? Number(((zeroSamples / samples) * 100).toFixed(2)) : 0
       });
     }
-    await this.bus.emit({ type: 'AUDIO_IN', data: { pcm16 }, ts_ms: tsMs });
+
+    this.inputQueue.push({ pcm16, tsMs });
+  }
+
+  private async inputLoop() {
+    while (this.fsm.state !== State.ENDED) {
+      const { pcm16, tsMs } = await this.inputQueue.next();
+
+      let vadStarted = false;
+      if (this.backendVadEnabled) {
+        for (const ev of this.vad.process(pcm16)) {
+          if (ev === 'speech_start') {
+            vadStarted = true;
+            this.speechActive = true;
+            this.clearVadEndTimer();
+            await this.sendJson({ type: 'vad', event: 'speech_start', ts_ms: tsMs });
+            if (this.fsm.state === State.SPEAKING && this.bargeEnabled) {
+              await this.handleBargeIn();
+              break;
+            }
+          } else if (ev === 'speech_end') {
+            this.speechActive = false;
+            await this.sendJson({ type: 'vad', event: 'speech_end', ts_ms: tsMs });
+            this.scheduleVadEnd();
+          }
+        }
+      } else {
+        this.speechActive = true;
+      }
+
+      if (this.fsm.state !== State.LISTENING) {
+        continue;
+      }
+
+      if ((this.speechActive || vadStarted) && !this.asrClosing) {
+        this.ensureAsrLoop();
+        await this.asr.feed(pcm16);
+      }
+    }
+  }
+
+  private ensureAsrLoop() {
+    if (this.asrTask || this.fsm.state === State.ENDED) return;
+    this.asrTask = this.asrLoop();
+  }
+
+  private async asrLoop() {
+    try {
+      logger.info('asr loop start', { sid: this.sessionId });
+      for await (const res of this.asr.stream()) {
+        if (res.isFinal) {
+          await this.handleAsrFinal(res.text, res.confidence, res.startMs, res.endMs);
+        } else {
+          await this.handleAsrPartial(res.text, res.confidence);
+        }
+      }
+      if (this.fsm.state !== State.ENDED) {
+        logger.info('asr loop ended', { sid: this.sessionId });
+      }
+    } catch (e) {
+      logger.error('asr loop error', { sid: this.sessionId, error: e });
+      if (this.fsm.state !== State.ENDED) {
+        await this.sendJson({
+          type: 'error',
+          code: 'ASR_ERROR',
+          message: e instanceof Error ? e.message : String(e)
+        });
+      }
+    } finally {
+      this.asrTask = null;
+      if (this.fsm.state !== State.ENDED) {
+        this.asr = new AsrClient();
+        this.asrClosing = false;
+      }
+    }
+  }
+
+  private async handleAsrPartial(text: string, confidence?: number) {
+    if (text.length === 0) return;
+    this.asrPartials += 1;
+    if (this.asrPartials % 5 === 0) {
+      logger.debug('asr partial count', { sid: this.sessionId, partials: this.asrPartials });
+    }
+    if (this.fsm.state !== State.LISTENING) return;
+    await this.sendJson({ type: 'asr', is_final: false, text, confidence, ts_ms: nowMs() });
+  }
+
+  private async handleAsrFinal(text: string, confidence?: number, start_ms?: number, end_ms?: number) {
+    if (!text || this.fsm.state !== State.LISTENING) return;
+    logger.info('asr final', { sid: this.sessionId, text });
+    await this.sendJson({ type: 'asr', is_final: true, text, confidence, start_ms, end_ms, ts_ms: nowMs() });
+
+    this.ctx.turnId += 1;
+    this.ctx.history.push({ role: 'user', content: text });
+
+    void this.runAssistant(text);
+  }
+
+  private async runAssistant(text: string) {
+    if (this.fsm.state === State.ENDED) return;
+    const runId = ++this.assistantRunId;
+
+    this.fsm.state = State.SPEAKING;
+    this.playback.resume();
+
+    if (this.llmAbort) this.llmAbort.abort();
+    if (this.ttsAbort) this.ttsAbort.abort();
+    this.llmAbort = new AbortController();
+    this.ttsAbort = new AbortController();
+
+    const llmSignal = this.llmAbort.signal;
+    const ttsSignal = this.ttsAbort.signal;
+
+    const ttsQueue = new AsyncQueue<string | null>();
+
+    const ttsWorker = (async () => {
+      try {
+        while (true) {
+          const chunk = await ttsQueue.next();
+          if (chunk === null) break;
+          logger.info('tts stream start', { sid: this.sessionId, len: chunk.length });
+          for await (const audio of this.tts.stream(chunk, ttsSignal)) {
+            await this.playback.put(audio);
+          }
+          logger.info('tts stream done', { sid: this.sessionId });
+        }
+      } catch {
+        logger.warn('tts stream aborted', { sid: this.sessionId });
+      }
+    })();
+
+    const enqueueChunk = async (chunk: string) => {
+      if (!chunk) return;
+      await this.sendJson({ type: 'assistant', text: chunk });
+      ttsQueue.push(chunk);
+    };
+
+    try {
+      logger.info('llm stream start', { sid: this.sessionId });
+      for await (const delta of this.llm.stream(this.ctx.history.slice(-10), llmSignal)) {
+        if (runId !== this.assistantRunId || llmSignal.aborted) break;
+        const chunks = this.chunker.push(delta);
+        for (const c of chunks) {
+          await enqueueChunk(c);
+        }
+      }
+      logger.info('llm stream done', { sid: this.sessionId });
+      for (const c of this.chunker.flush()) {
+        await enqueueChunk(c);
+      }
+    } catch {
+      logger.warn('llm stream aborted', { sid: this.sessionId });
+    } finally {
+      ttsQueue.push(null);
+    }
+
+    await ttsWorker;
+    await this.playback.waitForDrain();
+
+    if (this.isEnded()) return;
+    if (runId !== this.assistantRunId) return;
+
+    this.fsm.state = State.LISTENING;
+  }
+
+  private async handleBargeIn() {
+    if (!this.bargeEnabled) return;
+    await this.sendJson({ type: 'barge_in' });
+    this.interruptAssistant('barge_in');
+  }
+
+  private interruptAssistant(reason: 'barge_in' | 'session_end') {
+    this.assistantRunId += 1;
+    this.chunker.flush();
+    this.playback.stopAndClear();
+    if (this.llmAbort) this.llmAbort.abort();
+    if (this.ttsAbort) this.ttsAbort.abort();
+    if (reason === 'barge_in') {
+      this.fsm.state = State.LISTENING;
+    }
   }
 
   private async playbackLoop() {
@@ -129,262 +311,6 @@ export class Session {
     }
   }
 
-  private async eventLoop() {
-    let llmAbort: AbortController | null = null;
-    let ttsAbort: AbortController | null = null;
-
-    while (this.fsm.state !== State.ENDED) {
-      const e = await this.bus.next();
-
-      // LLM token / done must be processed regardless of current FSM state
-      // to avoid dropping streamed content after we start speaking.
-      if (e.type === 'LLM_TOKEN') {
-        const chunks = this.chunker.push((e.data as any).delta as string);
-        for (const c of chunks) {
-          await this.bus.emit({ type: 'ASSISTANT_CHUNK', data: { text: c }, ts_ms: nowMs() });
-        }
-        continue;
-      }
-      if (e.type === 'LLM_DONE') {
-        for (const c of this.chunker.flush()) {
-          await this.bus.emit({ type: 'ASSISTANT_CHUNK', data: { text: c }, ts_ms: nowMs() });
-        }
-        if (this.fsm.state === State.THINKING) {
-          this.fsm.state = State.LISTENING;
-        }
-        continue;
-      }
-
-      if (e.type === 'SESSION_END_REQUEST' || e.type === 'REMOTE_HANGUP' || e.type === 'ERROR') {
-        logger.info('session ending', { sid: this.sessionId, event: e.type, data: e.data });
-        this.barge.interrupt();
-        this.fsm.state = State.ENDED;
-        if (e.type === 'ERROR') {
-          await this.sendJson({
-            type: 'error',
-            code: 'SESSION_ERROR',
-            message: String((e.data as any).message ?? (e.data as any).reason ?? 'unknown')
-          });
-        }
-        await this.sendJson({ type: 'end', reason: (e.data as any).reason ?? 'ended' });
-        if (typeof this.asr.planClose === 'function') this.asr.planClose();
-        await this.asr.close();
-        await this.tts.close();
-        await this.stopRecording();
-        break;
-      }
-
-      if (this.fsm.state === State.LISTENING) {
-        if (e.type === 'AUDIO_IN') {
-          const pcm16 = (e.data as any).pcm16 as Buffer;
-          this.turn.recordAudio(pcm16);
-
-          let vadStarted = false;
-          if (this.backendVadEnabled) {
-            for (const ev of this.vad.process(pcm16)) {
-              if (ev === 'speech_start') {
-                vadStarted = true;
-                this.speechActive = true;
-                await this.sendJson({ type: 'vad', event: 'speech_start', ts_ms: e.ts_ms });
-                this.turn.onSpeechStart();
-            } else if (ev === 'speech_end') {
-              this.speechActive = false;
-              await this.sendJson({ type: 'vad', event: 'speech_end', ts_ms: e.ts_ms });
-              this.turn.onSpeechEnd();
-              // Signal ASR to finish the current utterance; let the provider close after idle
-              // so it can deliver final results before restart.
-              if (typeof this.asr.planClose === 'function') this.asr.planClose();
-            }
-          }
-          } else {
-            // 后端 VAD 关闭时，认为始终在语音段内，直接送 ASR
-            this.speechActive = true;
-          }
-
-          if (!this.asrTask) {
-            this.asrTask = this.asrLoop();
-          }
-
-          // 仅在 VAD 判断为语音段内才把音频送去 ASR，避免噪声持续占用链路。
-          if (this.speechActive || vadStarted) {
-            await this.asr.feed(pcm16);
-          }
-        } else if (e.type === 'ASR_PARTIAL') {
-          this.asrPartials += 1;
-          if (this.asrPartials % 5 === 0) {
-            logger.debug('asr partial count', { sid: this.sessionId, partials: this.asrPartials });
-          }
-          const text = (e.data as any).text as string;
-          const confidence = (e.data as any).confidence as number | undefined;
-          this.turn.onPartial(text);
-          await this.sendJson({ type: 'asr', is_final: false, text, confidence, ts_ms: e.ts_ms });
-        } else if (e.type === 'ASR_FINAL') {
-          logger.info('asr final', { sid: this.sessionId, text: (e.data as any).text });
-          const text = (e.data as any).text as string;
-          const confidence = (e.data as any).confidence as number | undefined;
-          const start_ms = (e.data as any).startMs as number | undefined;
-          const end_ms = (e.data as any).endMs as number | undefined;
-          await this.sendJson({ type: 'asr', is_final: true, text, confidence, start_ms, end_ms, ts_ms: e.ts_ms });
-
-          this.ctx.turnId += 1;
-          this.ctx.history.push({ role: 'user', content: text });
-          this.turn.onFinal();
-
-          this.fsm.state = State.THINKING;
-
-          llmAbort = new AbortController();
-          const llmSignal = llmAbort.signal;
-          const runLLM = async () => {
-            try {
-              logger.info('llm stream start', { sid: this.sessionId });
-              for await (const delta of this.llm.stream(this.ctx.history.slice(-10), llmSignal)) {
-                await this.bus.emit({ type: 'LLM_TOKEN', data: { delta }, ts_ms: nowMs() });
-              }
-              logger.info('llm stream done', { sid: this.sessionId });
-              await this.bus.emit({ type: 'LLM_DONE', data: {}, ts_ms: nowMs() });
-            } catch {
-              logger.warn('llm stream aborted', { sid: this.sessionId });
-              return;
-            }
-          };
-          void runLLM();
-          this.barge.bindControllers(llmAbort, ttsAbort);
-        }
-      } else if (this.fsm.state === State.THINKING) {
-        if (e.type === 'ASSISTANT_CHUNK') {
-          const text = (e.data as any).text as string;
-          logger.info('assistant chunk', { sid: this.sessionId, len: text.length });
-        await this.sendJson({ type: 'assistant', text });
-
-          this.fsm.state = State.SPEAKING;
-          this.playback.resume();
-
-          if (!ttsAbort) ttsAbort = new AbortController();
-          const ttsSignal = ttsAbort.signal;
-          const runTTS = async () => {
-            try {
-              logger.info('tts stream start', { sid: this.sessionId, len: text.length });
-              for await (const audio of this.tts.stream(text, ttsSignal)) {
-                await this.playback.put(audio);
-              }
-              logger.info('tts stream done', { sid: this.sessionId });
-              await this.bus.emit({ type: 'TTS_DONE', data: {}, ts_ms: nowMs() });
-            } catch {
-              logger.warn('tts stream aborted', { sid: this.sessionId });
-              return;
-            }
-          };
-          void runTTS();
-          if (this.bargeEnabled) this.barge.bindControllers(llmAbort, ttsAbort);
-        }
-      } else if (this.fsm.state === State.SPEAKING) {
-        if (e.type === 'AUDIO_IN') {
-          const pcm16 = (e.data as any).pcm16 as Buffer;
-          if (this.bargeEnabled) {
-            for (const ev of this.vad.process(pcm16)) {
-              if (ev === 'speech_start') {
-                await this.bus.emit({ type: 'BARGE_IN', data: {}, ts_ms: nowMs() });
-                break;
-              }
-            }
-          }
-        } else if (e.type === 'ASSISTANT_CHUNK') {
-          const text = (e.data as any).text as string;
-          if (!ttsAbort) ttsAbort = new AbortController();
-          const ttsSignal = ttsAbort.signal;
-          const runTTS = async () => {
-            try {
-              logger.info('tts append stream start', { sid: this.sessionId, len: text.length });
-              for await (const audio of this.tts.stream(text, ttsSignal)) {
-                await this.playback.put(audio);
-              }
-              logger.info('tts append stream done', { sid: this.sessionId });
-              await this.bus.emit({ type: 'TTS_DONE', data: {}, ts_ms: nowMs() });
-            } catch {
-              logger.warn('tts append stream aborted', { sid: this.sessionId });
-              return;
-            }
-          };
-          void runTTS();
-          if (this.bargeEnabled) this.barge.bindControllers(llmAbort, ttsAbort);
-        } else if (e.type === 'BARGE_IN') {
-          if (this.bargeEnabled) {
-            await this.sendJson({ type: 'barge_in' });
-            this.barge.interrupt();
-            this.playback.resume();
-            this.chunker.flush();
-            this.fsm.state = State.LISTENING;
-            this.turn.reset();
-            llmAbort = null;
-            ttsAbort = null;
-          }
-        } else if (e.type === 'TTS_DONE') {
-          // Playback will still drain any queued audio; we switch to listening for the next turn.
-          this.fsm.state = State.LISTENING;
-          this.turn.reset();
-          llmAbort = null;
-          ttsAbort = null;
-        }
-      }
-    }
-  }
-
-  private async asrLoop() {
-    try {
-      logger.info('asr loop start', { sid: this.sessionId });
-      for await (const res of this.asr.stream()) {
-        const type = res.isFinal ? 'ASR_FINAL' : 'ASR_PARTIAL';
-        logger.debug('asr result', { sid: this.sessionId, type, textLen: res.text.length, isFinal: Boolean(res.isFinal) });
-        await this.bus.emit({
-          type,
-          data: {
-            text: res.text,
-            confidence: res.confidence,
-            startMs: res.startMs,
-            endMs: res.endMs
-          },
-          ts_ms: nowMs()
-        });
-      }
-      if (this.fsm.state !== State.ENDED) {
-        if (this.asrRestarting) {
-          logger.info('asr loop ended due to planned restart', { sid: this.sessionId });
-          return;
-        }
-        if (typeof this.asr.isPlannedClose === 'function' && this.asr.isPlannedClose()) {
-          logger.info('asr loop ended after planned close', { sid: this.sessionId });
-          await this.emitFinalFromTurn(true);
-          await this.restartAsrForNextTurn();
-          return;
-        }
-        logger.warn('asr loop ended unexpectedly', { sid: this.sessionId });
-        await this.bus.emit({
-          type: 'ERROR',
-          data: { reason: 'asr_stream_ended', message: 'ASR stream ended unexpectedly' },
-          ts_ms: nowMs()
-        });
-      }
-    } catch (e) {
-      if (this.asrRestarting) {
-        logger.info('asr loop stopped during planned restart', { sid: this.sessionId });
-        return;
-      }
-      logger.error('asr loop error', { sid: this.sessionId, error: e });
-      if (this.fsm.state !== State.ENDED) {
-        await this.bus.emit({
-          type: 'ERROR',
-          data: {
-            reason: 'asr_stream_error',
-            message: e instanceof Error ? e.message : String(e)
-          },
-          ts_ms: nowMs()
-        });
-      }
-    } finally {
-      this.asrTask = null;
-    }
-  }
-
   private summarizePcm(pcm16: Buffer) {
     const len = Math.floor(pcm16.length / 2);
     if (len === 0) return { rms: 0, zeroSamples: 0, samples: 0 };
@@ -400,23 +326,16 @@ export class Session {
     return { rms, zeroSamples, samples: len };
   }
 
-  private async restartAsrForNextTurn() {
-    if (this.asrRestarting || this.fsm.state === State.ENDED) return;
-    this.asrRestarting = true;
+  async handleMicClose() {
+    logger.info('session mic close', { sid: this.sessionId });
+    this.clearVadEndTimer();
+    this.asrClosing = true;
+    if (typeof this.asr.planClose === 'function') this.asr.planClose();
+    await this.asr.close();
+    this.asr = new AsrClient();
+    this.asrTask = null;
     this.speechActive = false;
-    logger.info('asr restart begin', { sid: this.sessionId });
-    try {
-      if (typeof this.asr.planClose === 'function') this.asr.planClose();
-      await this.asr.close();
-      if (this.asrTask) {
-        await this.asrTask;
-      }
-      this.asr = new AsrClient();
-      this.turn.reset();
-      logger.info('asr restart complete', { sid: this.sessionId });
-    } finally {
-      this.asrRestarting = false;
-    }
+    this.asrClosing = false;
   }
 
   private async startRecording() {
@@ -454,21 +373,30 @@ export class Session {
     }
   }
 
-  async handleMicClose() {
-    logger.info('session mic close', { sid: this.sessionId });
-    await this.restartAsrForNextTurn();
+  private isEnded(): boolean {
+    return this.fsm.state === State.ENDED;
   }
 
-  private async emitFinalFromTurn(force = false) {
-    if (this.fsm.state !== State.LISTENING || this.fsm.state === State.ENDED) return;
-    const text = this.turn.getLastPartial();
-    if (!force && !text) return;
-    if ((text ?? '').trim().length === 0) return;
-    logger.info('turn timeout emitting final', { sid: this.sessionId, textLen: text.length, force });
-    await this.bus.emit({
-      type: 'ASR_FINAL',
-      data: { text },
-      ts_ms: nowMs()
-    });
+  private scheduleVadEnd() {
+    this.clearVadEndTimer();
+    this.vadEndTimer = setTimeout(() => {
+      this.vadEndTimer = null;
+      void this.endAsrUtterance();
+    }, this.vadEndMs);
+  }
+
+  private clearVadEndTimer() {
+    if (this.vadEndTimer) {
+      clearTimeout(this.vadEndTimer);
+      this.vadEndTimer = null;
+    }
+  }
+
+  private async endAsrUtterance() {
+    if (this.asrClosing || this.fsm.state === State.ENDED) return;
+    this.asrClosing = true;
+    logger.info('vad end -> asr close', { sid: this.sessionId, delay_ms: this.vadEndMs });
+    if (typeof this.asr.planClose === 'function') this.asr.planClose();
+    await this.asr.close();
   }
 }

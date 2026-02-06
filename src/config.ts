@@ -18,6 +18,7 @@ export type Config = {
   volcSampleRate: number;
   volcTtsModel?: string;
   volcAsrIdleMs?: number;
+  volcAsrWsIdleMs?: number;
   maxUtterMs?: number;
   silenceToHangupMs?: number;
   recordPcm: boolean;
@@ -66,7 +67,10 @@ export const config: Config = {
   volcVoiceType: process.env.VOLC_VOICE_TYPE ?? 'BV700_V2_streaming',
   volcSampleRate: Number(process.env.VOLC_SAMPLE_RATE ?? 24000),
   volcTtsModel: process.env.VOLC_TTS_MODEL,
-  volcAsrIdleMs: process.env.VOLC_ASR_IDLE_MS ? Number(process.env.VOLC_ASR_IDLE_MS) : undefined,
+  // Shorter idle reduces end-of-utterance latency; override via env as needed.
+  volcAsrIdleMs: process.env.VOLC_ASR_IDLE_MS ? Number(process.env.VOLC_ASR_IDLE_MS) : 1000,
+  // ASR websocket idle close; keep this higher to avoid churn when VAD gates audio.
+  volcAsrWsIdleMs: process.env.VOLC_ASR_WS_IDLE_MS ? Number(process.env.VOLC_ASR_WS_IDLE_MS) : 5000,
   maxUtterMs: process.env.MAX_UTTER_MS ? Number(process.env.MAX_UTTER_MS) : undefined,
   silenceToHangupMs: process.env.SILENCE_TO_HANGUP_MS ? Number(process.env.SILENCE_TO_HANGUP_MS) : undefined,
   recordPcm: String(process.env.RECORD_PCM ?? 'false').toLowerCase() === 'true',

@@ -90,6 +90,8 @@ npm run dev
 - `VOLC_TTS_RESOURCE_ID`：TTS 资源ID（注意不是模型名，不能填 `seed-tts-1.1`）
 - `VOLC_TTS_MODEL`：TTS 模型参数（可填 `seed-tts-1.1`）
 - `VOLC_VOICE_TYPE`：音色
+- `VOLC_ASR_IDLE_MS`：轮次静音判定（毫秒），决定从“说完”到触发最终识别的延迟
+- `VOLC_ASR_WS_IDLE_MS`：ASR 连接空闲关闭（毫秒），VAD 关闭或静音时避免频繁重连
 - `OPENAI_API_KEY`：LLM 鉴权
 
 ## 日志

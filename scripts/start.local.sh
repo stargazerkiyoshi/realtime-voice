@@ -23,4 +23,6 @@ export OPENAI_API_KEY="9e85f8d6-3396-49c0-bfaa-2dcec62e858c"
 export OPENAI_MODEL="doubao-1-5-pro-32k-250115"
 export OPENAI_BASE_URL="https://ark.cn-beijing.volces.com/api/v3"
 
+export VOLC_ASR_WS_IDLE_MS=5000
+
 pnpm dev

@@ -2,6 +2,7 @@
 import { config } from '../config';
 
 type ChatMessage = { role: 'system' | 'user' | 'assistant'; content: string };
+type InputMessage = ChatMessage | { role: 'tool'; content: string };
 
 export class LLMClient {
   private client: OpenAI;
@@ -15,12 +16,13 @@ export class LLMClient {
     this.model = config.openaiModel;
   }
 
-  async *stream(messages: Array<ChatMessage>, signal?: AbortSignal): AsyncGenerator<string> {
+  async *stream(messages: Array<InputMessage>, signal?: AbortSignal): AsyncGenerator<string> {
+    const chatMessages = messages.filter((m) => m.role !== 'tool') as ChatMessage[];
     const response = await this.client.chat.completions.create(
       {
         model: this.model,
         stream: true,
-        messages
+        messages: chatMessages
       },
       { signal }
     );
