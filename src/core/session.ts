@@ -12,6 +12,8 @@ import { AsrClient } from '../asr/asr-base';
 import { config } from '../config';
 import { logger } from '../observability/logger';
 import { TurnManager } from './turn-manager';
+import { WavWriter } from '../audio/wav-writer';
+import path from 'node:path';
 
 const nowMs = () => Date.now();
 
@@ -58,6 +60,8 @@ export class Session {
   private audioInPackets = 0;
   private asrPartials = 0;
   private ttsChunks = 0;
+  private wavWriter: WavWriter | null = null;
+  private recordPath: string | null = null;
 
   constructor(sessionId: string, sendJson: SendJson) {
     this.sessionId = sessionId;
@@ -68,6 +72,7 @@ export class Session {
     logger.info('session start', { sid: this.sessionId });
     await this.sendJson({ type: 'ready', session_id: this.sessionId });
     this.fsm.state = State.LISTENING;
+    await this.startRecording();
     this.playbackTask = this.playbackLoop();
     this.runnerTask = this.eventLoop();
   }
@@ -83,8 +88,25 @@ export class Session {
       return;
     }
     this.audioInPackets += 1;
+    if (this.wavWriter) {
+      try {
+        await this.wavWriter.write(pcm16);
+      } catch (err) {
+        logger.warn('session record write failed', {
+          sid: this.sessionId,
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
+    }
     if (this.audioInPackets % 20 === 0) {
-      logger.debug('session audio in', { sid: this.sessionId, packets: this.audioInPackets, bytes: pcm16.length });
+      const { rms, zeroSamples, samples } = this.summarizePcm(pcm16);
+      logger.debug('session audio in', {
+        sid: this.sessionId,
+        packets: this.audioInPackets,
+        bytes: pcm16.length,
+        rms: Number(rms.toFixed(6)),
+        zero_pct: samples > 0 ? Number(((zeroSamples / samples) * 100).toFixed(2)) : 0
+      });
     }
     await this.bus.emit({ type: 'AUDIO_IN', data: { pcm16 }, ts_ms: tsMs });
   }
@@ -148,6 +170,7 @@ export class Session {
         if (typeof this.asr.planClose === 'function') this.asr.planClose();
         await this.asr.close();
         await this.tts.close();
+        await this.stopRecording();
         break;
       }
 
@@ -362,6 +385,21 @@ export class Session {
     }
   }
 
+  private summarizePcm(pcm16: Buffer) {
+    const len = Math.floor(pcm16.length / 2);
+    if (len === 0) return { rms: 0, zeroSamples: 0, samples: 0 };
+    let sumSq = 0;
+    let zeroSamples = 0;
+    for (let i = 0; i < len; i += 1) {
+      const v = pcm16.readInt16LE(i * 2);
+      if (v === 0) zeroSamples += 1;
+      const f = v / 32768;
+      sumSq += f * f;
+    }
+    const rms = Math.sqrt(sumSq / len);
+    return { rms, zeroSamples, samples: len };
+  }
+
   private async restartAsrForNextTurn() {
     if (this.asrRestarting || this.fsm.state === State.ENDED) return;
     this.asrRestarting = true;
@@ -378,6 +416,41 @@ export class Session {
       logger.info('asr restart complete', { sid: this.sessionId });
     } finally {
       this.asrRestarting = false;
+    }
+  }
+
+  private async startRecording() {
+    if (!config.recordPcm) return;
+    const filename = `session-${this.sessionId}-${Date.now()}.wav`;
+    this.recordPath = path.join(config.recordPcmDir, filename);
+    this.wavWriter = new WavWriter(this.recordPath, 16000, 1, 16);
+    try {
+      await this.wavWriter.init();
+      logger.info('session record start', { sid: this.sessionId, path: this.recordPath });
+    } catch (err) {
+      logger.warn('session record init failed', {
+        sid: this.sessionId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+      this.wavWriter = null;
+      this.recordPath = null;
+    }
+  }
+
+  private async stopRecording() {
+    if (!this.wavWriter) return;
+    const pathHint = this.recordPath;
+    try {
+      await this.wavWriter.close();
+      logger.info('session record end', { sid: this.sessionId, path: pathHint });
+    } catch (err) {
+      logger.warn('session record close failed', {
+        sid: this.sessionId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    } finally {
+      this.wavWriter = null;
+      this.recordPath = null;
     }
   }
 

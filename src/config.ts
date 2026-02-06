@@ -20,6 +20,8 @@ export type Config = {
   volcAsrIdleMs?: number;
   maxUtterMs?: number;
   silenceToHangupMs?: number;
+  recordPcm: boolean;
+  recordPcmDir: string;
   openaiApiKey?: string;
   openaiBaseUrl?: string;
   openaiModel: string;
@@ -67,6 +69,8 @@ export const config: Config = {
   volcAsrIdleMs: process.env.VOLC_ASR_IDLE_MS ? Number(process.env.VOLC_ASR_IDLE_MS) : undefined,
   maxUtterMs: process.env.MAX_UTTER_MS ? Number(process.env.MAX_UTTER_MS) : undefined,
   silenceToHangupMs: process.env.SILENCE_TO_HANGUP_MS ? Number(process.env.SILENCE_TO_HANGUP_MS) : undefined,
+  recordPcm: String(process.env.RECORD_PCM ?? 'false').toLowerCase() === 'true',
+  recordPcmDir: process.env.RECORD_PCM_DIR ?? 'logs',
   openaiApiKey: process.env.OPENAI_API_KEY,
   openaiBaseUrl: process.env.OPENAI_BASE_URL,
   openaiModel: process.env.OPENAI_MODEL ?? 'gpt-4.1-mini'

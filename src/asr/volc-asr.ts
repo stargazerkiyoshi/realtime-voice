@@ -183,6 +183,7 @@ export class VolcAsrClient implements AsrProvider {
   private handleMessage(data: Buffer) {
     if (data.length < 8) return;
     const header = parseHeader(data.slice(0, 4));
+    logger.debug('asr recv raw', { len: data.length, msgType: header.msgType, flags: header.flags });
     this.recvFrames += 1;
     if (this.recvFrames % 20 === 0) {
       logger.debug('asr recv frame', { idx: this.recvFrames, msgType: header.msgType, flags: header.flags, len: data.length });
@@ -228,13 +229,37 @@ export class VolcAsrClient implements AsrProvider {
     } catch {
       return;
     }
+    logger.debug('asr recv response', {
+      payloadLen: payloadSize,
+      keys: obj && typeof obj === 'object' ? Object.keys(obj) : []
+    });
 
     const result = obj?.result;
-    if (!result) return;
-
+    if (!result) {
+      const raw = JSON.stringify(obj);
+      logger.debug('asr recv missing result', { preview: raw.slice(0, 200) });
+      return;
+    }
     const utterances = Array.isArray(result.utterances) ? result.utterances : [];
     const lastUtt = utterances.length > 0 ? utterances[utterances.length - 1] : undefined;
+    const textPreview =
+      (lastUtt?.text as string | undefined) ??
+      (result.text as string | undefined) ??
+      '';
+    logger.debug('asr recv result', {
+      textLen: textPreview.length,
+      utteranceCount: utterances.length,
+      isFinal: Boolean(lastUtt?.definite || result.definite || result.is_final)
+    });
+
     const text = (lastUtt?.text as string) || (result.text as string) || '';
+    if (!text) {
+      const resultPreview = JSON.stringify(result).slice(0, 200);
+      logger.debug('asr recv empty text', {
+        resultKeys: result && typeof result === 'object' ? Object.keys(result) : [],
+        preview: resultPreview
+      });
+    }
     const startMs = typeof lastUtt?.start_time === 'number' ? lastUtt.start_time : undefined;
     const endMs = typeof lastUtt?.end_time === 'number' ? lastUtt.end_time : undefined;
     const isFinal =
