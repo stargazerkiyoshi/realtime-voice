@@ -7,7 +7,7 @@ function createAsrProvider(): AsrProvider {
   switch (config.asrProvider) {
     case 'volc':
       return new VolcAsrClient({
-        idleMs: config.volcAsrIdleMs
+        idleMs: config.volcAsrWsIdleMs ?? config.volcAsrIdleMs
       });
     default:
       throw new Error(`Unsupported ASR provider: ${config.asrProvider}`);

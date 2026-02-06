@@ -9,7 +9,7 @@
                     "dev:local": "powershell -ExecutionPolicy Bypass -File scripts/start.local.ps1",
                     "build":  "tsc -p tsconfig.json",
                     "start":  "node dist/server.js",
-                    "test":  "node --import tsx --test tests/async-queue.test.ts tests/chunker.test.ts tests/asr-parse.test.ts",
+                    "test":  "node --import tsx --test tests/async-queue.test.ts tests/chunker.test.ts tests/asr-parse.test.ts tests/playback-queue.test.ts",
                     "asr:diag": "node --import tsx scripts/asr.diagnose.ts"
                 },
     "dependencies":  {
