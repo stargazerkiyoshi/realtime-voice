@@ -42,6 +42,8 @@ export default function VoiceTest() {
   const [micRms, setMicRms] = useState(0);
   const [zeroChunks, setZeroChunks] = useState(0);
   const [dialog, setDialog] = useState<Array<{ role: 'user' | 'assistant'; text: string }>>([]);
+  const [rawRecording, setRawRecording] = useState(false);
+  const [rawMime, setRawMime] = useState('');
 
   const wsRef = useRef<WebSocket | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
@@ -50,9 +52,12 @@ export default function VoiceTest() {
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const workletNodeRef = useRef<AudioWorkletNode | null>(null);
   const frontendVadRef = useRef<{ speech: boolean }>({ speech: false });
+  const rawRecorderRef = useRef<MediaRecorder | null>(null);
+  const rawChunksRef = useRef<Blob[]>([]);
 
   const playCtxRef = useRef<AudioContext | null>(null);
   const nextPlayTsRef = useRef(0);
+  const outPacketsRef = useRef(0);
 
   // Ensure we have an AudioContext that is allowed to play; browsers often start in "suspended" state
   const getPlayableCtx = async (): Promise<AudioContext> => {
@@ -92,6 +97,19 @@ export default function VoiceTest() {
   };
 
   const clearMic = () => {
+    if (rawRecorderRef.current) {
+      try {
+        if (rawRecorderRef.current.state !== 'inactive') {
+          rawRecorderRef.current.stop();
+        }
+      } catch {
+        // ignore
+      }
+      rawRecorderRef.current = null;
+      rawChunksRef.current = [];
+      setRawRecording(false);
+      setRawMime('');
+    }
     processorRef.current?.disconnect();
     micSourceRef.current?.disconnect();
     workletNodeRef.current?.disconnect();
@@ -233,6 +251,65 @@ export default function VoiceTest() {
     log(`=> ${summarizeOutbound(payload)}`);
   };
 
+  const pickRecorderMime = () => {
+    const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/ogg'];
+    for (const c of candidates) {
+      if (MediaRecorder.isTypeSupported(c)) return c;
+    }
+    return '';
+  };
+
+  const downloadBlob = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const startRawRecording = () => {
+    if (!mediaStreamRef.current || rawRecording) return;
+    try {
+      const mimeType = pickRecorderMime();
+      const recorder = new MediaRecorder(mediaStreamRef.current, mimeType ? { mimeType } : undefined);
+      rawChunksRef.current = [];
+      recorder.ondataavailable = (ev) => {
+        if (ev.data && ev.data.size > 0) rawChunksRef.current.push(ev.data);
+      };
+      recorder.onstop = () => {
+        const chunks = rawChunksRef.current;
+        rawChunksRef.current = [];
+        const blob = new Blob(chunks, { type: mimeType || 'audio/webm' });
+        if (!blob.size) return;
+        const sr = audioCtxRef.current?.sampleRate ?? 'unknown';
+        const ext = mimeType.includes('ogg') ? 'ogg' : 'webm';
+        const stamp = new Date().toISOString().replace(/[:.]/g, '');
+        const filename = `mic-${sr}hz-${stamp}.${ext}`;
+        downloadBlob(blob, filename);
+        log(`Raw recording saved: ${filename} (${Math.round(blob.size / 1024)}KB, mime=${mimeType || 'default'})`);
+      };
+      recorder.start(250);
+      rawRecorderRef.current = recorder;
+      setRawRecording(true);
+      setRawMime(mimeType || 'default');
+      log(`Raw recording started (${mimeType || 'default'})`);
+    } catch (err) {
+      log(`Raw recording failed: ${err instanceof Error ? err.message : String(err)}`);
+      setRawRecording(false);
+      setRawMime('');
+    }
+  };
+
+  const stopRawRecording = () => {
+    const recorder = rawRecorderRef.current;
+    if (!recorder) return;
+    if (recorder.state !== 'inactive') recorder.stop();
+    rawRecorderRef.current = null;
+    setRawRecording(false);
+    setRawMime('');
+  };
+
   const startSession = () => {
     const payload: Record<string, unknown> = { type: 'start' };
     if (sessionId.trim()) payload.session_id = sessionId.trim();
@@ -254,10 +331,7 @@ export default function VoiceTest() {
 
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true
+          channelCount: 1
         }
       });
 
@@ -270,6 +344,7 @@ export default function VoiceTest() {
         numberOfOutputs: 0,
         processorOptions: {
           targetSampleRate: ASR_SAMPLE_RATE,
+          inputSampleRate: audioCtx.sampleRate,
           vadStartThresh: 2e-4,
           vadStopThresh: 1e-4,
           vadHangFrames: 6
@@ -306,6 +381,21 @@ export default function VoiceTest() {
         }
         setZeroChunks((v) => (nonZero ? 0 : v + 1));
 
+        outPacketsRef.current += 1;
+        if (outPacketsRef.current % 20 === 0) {
+          let sumSq = 0;
+          let zero = 0;
+          for (let i = 0; i < pcm16.length; i += 1) {
+            const v = pcm16[i];
+            if (v === 0) zero += 1;
+            const f = v / 0x8000;
+            sumSq += f * f;
+          }
+          const rms = Math.sqrt(sumSq / pcm16.length);
+          const zeroPct = (zero / pcm16.length) * 100;
+          log(`out pcm stats: rms=${rms.toFixed(6)} zero_pct=${zeroPct.toFixed(2)}`);
+        }
+
         send({
           type: 'audio',
           payload_b64: int16ToBase64(pcm16),
@@ -332,6 +422,7 @@ export default function VoiceTest() {
   };
 
   const stopMic = () => {
+    stopRawRecording();
     clearMic();
     log('Mic capture stopped');
   };
@@ -371,7 +462,17 @@ export default function VoiceTest() {
           <Button onClick={stopMic} disabled={!capturing}>
             Stop Mic
           </Button>
+          <Button onClick={startRawRecording} disabled={!capturing || rawRecording}>
+            Start Hi-Res Rec
+          </Button>
+          <Button onClick={stopRawRecording} disabled={!rawRecording}>
+            Stop Hi-Res Rec
+          </Button>
           <Tag color={capturing ? 'processing' : 'default'}>{capturing ? 'Capturing' : 'Idle'}</Tag>
+          <Tag color={rawRecording ? 'green' : 'default'}>
+            Hi-Res Rec: {rawRecording ? 'On' : 'Off'}
+          </Tag>
+          {rawRecording ? <Tag color="default">Mime: {rawMime}</Tag> : null}
           <Tag color={micRms > 0.005 ? 'green' : 'default'}>RMS: {micRms.toFixed(4)}</Tag>
           <Tag color={zeroChunks > 20 ? 'red' : 'default'}>Zero Chunks: {zeroChunks}</Tag>
         </Space>
