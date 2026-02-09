@@ -58,6 +58,7 @@ export default function VoiceTest() {
   const playCtxRef = useRef<AudioContext | null>(null);
   const nextPlayTsRef = useRef(0);
   const outPacketsRef = useRef(0);
+  const ttsSourcesRef = useRef<AudioBufferSourceNode[]>([]);
 
   // Ensure we have an AudioContext that is allowed to play; browsers often start in "suspended" state
   const getPlayableCtx = async (): Promise<AudioContext> => {
@@ -71,6 +72,38 @@ export default function VoiceTest() {
       }
     }
     return playCtx;
+  };
+
+  const stopPlayback = async (reason?: string) => {
+    const playCtx = playCtxRef.current;
+    if (playCtx && playCtx.state === 'suspended') {
+      try {
+        await playCtx.resume();
+      } catch {
+        // ignore resume failures on stop
+      }
+    }
+    const sources = ttsSourcesRef.current.splice(0);
+    for (const source of sources) {
+      try {
+        source.stop();
+      } catch {
+        // ignore stop failures
+      }
+      try {
+        source.disconnect();
+      } catch {
+        // ignore disconnect failures
+      }
+    }
+    if (playCtx) {
+      nextPlayTsRef.current = Math.max(playCtx.currentTime, nextPlayTsRef.current);
+    } else {
+      nextPlayTsRef.current = 0;
+    }
+    if (reason) {
+      log(`Playback stopped (${reason})`);
+    }
   };
 
   const log = (msg: string) => {
@@ -180,6 +213,10 @@ export default function VoiceTest() {
           }
           return;
         }
+        if (type === 'barge_in') {
+          await stopPlayback('barge_in');
+          return;
+        }
         // ignore vad for uplink gating; backend handles turn boundaries
         if (type === 'assistant') {
           const delta = String(msg.text ?? '');
@@ -213,6 +250,13 @@ export default function VoiceTest() {
           const source = playCtx.createBufferSource();
           source.buffer = buffer;
           source.connect(playCtx.destination);
+          ttsSourcesRef.current.push(source);
+          source.onended = () => {
+            const idx = ttsSourcesRef.current.indexOf(source);
+            if (idx >= 0) {
+              ttsSourcesRef.current.splice(idx, 1);
+            }
+          };
 
           const startAt = Math.max(playCtx.currentTime, nextPlayTsRef.current);
           source.start(startAt);

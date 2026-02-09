@@ -56,6 +56,8 @@ export class Session {
   private llmAbort: AbortController | null = null;
   private ttsAbort: AbortController | null = null;
   private assistantRunId = 0;
+  private lastInterruptReason: 'barge_in' | 'session_end' | null = null;
+  private lastInterruptRunId: number | null = null;
 
   private audioInPackets = 0;
   private asrPartials = 0;
@@ -65,6 +67,9 @@ export class Session {
   private lastSpeechEndMs: number | null = null;
   private perfSeq = 0;
   private playbackMark: { runId: number; mark: LatencyMark } | null = null;
+  private asrBacklog: Buffer[] = [];
+  private asrBacklogBytes = 0;
+  private asrBacklogMaxBytes = 64000;
 
   constructor(sessionId: string, sendJson: SendJson) {
     this.sessionId = sessionId;
@@ -163,10 +168,36 @@ export class Session {
       }
 
       const shouldFeed = this.speechActive || vadStarted || wasSpeechActive;
-      if (shouldFeed && !this.asrClosing) {
-        this.ensureAsrLoop();
-        await this.asr.feed(pcm16);
+      if (!shouldFeed) continue;
+      if (this.asrClosing) {
+        this.enqueueAsrBacklog(pcm16);
+        continue;
       }
+      await this.flushAsrBacklog();
+      this.ensureAsrLoop();
+      await this.asr.feed(pcm16);
+    }
+  }
+
+  private enqueueAsrBacklog(pcm16: Buffer) {
+    this.asrBacklog.push(pcm16);
+    this.asrBacklogBytes += pcm16.length;
+    while (this.asrBacklogBytes > this.asrBacklogMaxBytes) {
+      const dropped = this.asrBacklog.shift();
+      if (!dropped) break;
+      this.asrBacklogBytes -= dropped.length;
+    }
+  }
+
+  private async flushAsrBacklog() {
+    if (this.asrBacklog.length === 0) return;
+    this.ensureAsrLoop();
+    const backlog = this.asrBacklog;
+    this.asrBacklog = [];
+    this.asrBacklogBytes = 0;
+    for (const buf of backlog) {
+      if (this.asrClosing || this.fsm.state === State.ENDED) return;
+      await this.asr.feed(buf);
     }
   }
 
@@ -238,6 +269,8 @@ export class Session {
   private async runAssistant(text: string, perf?: LatencyMark) {
     if (this.fsm.state === State.ENDED) return;
     const runId = ++this.assistantRunId;
+    this.lastInterruptReason = null;
+    this.lastInterruptRunId = null;
 
     this.fsm.state = State.SPEAKING;
     this.playback.resume();
@@ -303,6 +336,7 @@ export class Session {
     let assistantText = '';
     const enqueueChunk = async (chunk: string) => {
       if (!chunk) return;
+      if (runId !== this.assistantRunId || llmSignal.aborted) return;
       assistantText += chunk;
       if (perfMark && !perfMark.assistantFirstMs) {
         perfMark.assistantFirstMs = nowMs();
@@ -346,11 +380,21 @@ export class Session {
     }
     await this.playback.waitForDrain();
 
+    const trimmedAssistant = assistantText.trim();
+    const interruptedByBarge =
+      this.lastInterruptReason === 'barge_in' && this.lastInterruptRunId === runId;
+    if (interruptedByBarge && trimmedAssistant.length > 0) {
+      this.ctx.history.push({ role: 'assistant', content: trimmedAssistant, interrupted: true });
+    }
+    if (this.lastInterruptRunId === runId) {
+      this.lastInterruptReason = null;
+      this.lastInterruptRunId = null;
+    }
+
     if (this.isEnded()) return;
     if (runId !== this.assistantRunId || llmSignal.aborted) return;
 
-    const trimmedAssistant = assistantText.trim();
-    if (trimmedAssistant.length > 0) {
+    if (!interruptedByBarge && trimmedAssistant.length > 0) {
       this.ctx.history.push({ role: 'assistant', content: trimmedAssistant });
     }
 
@@ -371,6 +415,8 @@ export class Session {
   }
 
   private interruptAssistant(reason: 'barge_in' | 'session_end') {
+    this.lastInterruptReason = reason;
+    this.lastInterruptRunId = this.assistantRunId;
     this.assistantRunId += 1;
     this.chunker.flush();
     this.playback.stopAndClear();
@@ -518,6 +564,7 @@ export class Session {
 
   private async endAsrUtterance() {
     if (this.asrClosing || this.fsm.state === State.ENDED) return;
+    if (this.speechActive) return;
     this.asrClosing = true;
     logger.info('vad end -> asr close', { sid: this.sessionId, delay_ms: this.vadEndMs });
     if (typeof this.asr.planClose === 'function') this.asr.planClose();

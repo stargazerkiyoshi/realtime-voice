@@ -1,6 +1,7 @@
 ﻿export interface HistoryItem {
   role: 'user' | 'assistant' | 'tool';
   content: string;
+  interrupted?: boolean;
 }
 
 export class ConversationContext {
