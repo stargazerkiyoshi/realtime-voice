@@ -2,7 +2,7 @@ import { randomUUID } from 'crypto';
 import WebSocket from 'ws';
 import { config } from '../config';
 import { sleep } from '../llm/util';
-import type { TtsProvider } from './types';
+import type { TtsProvider, TtsStreamSession } from './types';
 import { logger } from '../observability/logger';
 
 export type VolcTtsOptions = {
@@ -151,6 +151,12 @@ export class VolcTtsClient implements TtsProvider {
 
   async close(): Promise<void> {
     // no-op: each stream call owns its own websocket lifecycle
+  }
+
+  async openStream(signal?: AbortSignal): Promise<TtsStreamSession> {
+    const session = new VolcTtsStreamSession(this.opts, signal);
+    await session.init();
+    return session;
   }
 
   private headers() {
@@ -313,6 +319,220 @@ export class VolcTtsClient implements TtsProvider {
 
       if (!closed) ws.close();
       logger.info('tts stream end', { audioFrames, audioBytes });
+    }
+  }
+}
+
+class VolcTtsStreamSession implements TtsStreamSession {
+  private ws: WebSocket;
+  private queue: ParsedFrame[] = [];
+  private waiters: Array<(frame: ParsedFrame) => void> = [];
+  private failed: Error | null = null;
+  private closed = false;
+  private audioFrames = 0;
+  private audioBytes = 0;
+  private sessionId = randomUUID();
+  private finished = false;
+  private finishResolve: (() => void) | null = null;
+  private finishPromise = new Promise<void>((resolve) => {
+    this.finishResolve = resolve;
+  });
+
+  constructor(private readonly opts: VolcTtsOptions, private readonly signal?: AbortSignal) {
+    this.ws = new WebSocket(this.opts.url ?? config.volcTtsUrl, { headers: this.headers() });
+  }
+
+  async init(): Promise<void> {
+    const onAbort = () => {
+      this.closeSocket();
+    };
+    this.signal?.addEventListener('abort', onAbort);
+
+    this.ws.on('message', (data: WebSocket.RawData) => {
+      const raw =
+        typeof data === 'string'
+          ? Buffer.from(data, 'utf8')
+          : Buffer.isBuffer(data)
+          ? data
+          : Array.isArray(data)
+          ? Buffer.concat(data)
+          : Buffer.from(data as ArrayBuffer);
+      const parsed = parseFrame(raw);
+      if (!parsed) return;
+      if (parsed.event) {
+        logger.debug('tts recv event', { event: parsed.event, msgType: parsed.msgType, payloadBytes: parsed.payload.length });
+      }
+      this.pushFrame(parsed);
+    });
+    this.ws.on('error', (err) => {
+      logger.error('tts ws error', err);
+      this.failed = err instanceof Error ? err : new Error(String(err));
+    });
+    this.ws.on('close', () => {
+      logger.warn('tts ws close', { audioFrames: this.audioFrames, audioBytes: this.audioBytes });
+      this.closed = true;
+      this.finishResolve?.();
+      this.wakeWaiters();
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      this.ws.once('open', () => resolve());
+      this.ws.once('error', reject);
+    });
+
+    const startConnection = buildEventFrame(EVENT_START_CONNECTION, Buffer.from('{}', 'utf8'));
+    this.ws.send(startConnection);
+
+    while (true) {
+      const frame = await waitForFrame(this.queue, this.waiters, 15000);
+      if (frame.msgType === MSG_ERROR) {
+        throw new Error(`Volc TTS connect failed: ${frame.errorCode ?? 'unknown'}`);
+      }
+      if (frame.event === EVENT_CONNECTION_FAILED) {
+        throw new Error(`Volc TTS connection failed: ${frame.payload.toString('utf8')}`);
+      }
+      if (frame.event === EVENT_CONNECTION_STARTED) break;
+    }
+    logger.info('tts connection started');
+
+    const startSessionPayload = {
+      user: { uid: 'anonymous' },
+      req_params: {
+        speaker: this.opts.voiceType ?? config.volcVoiceType,
+        model: this.opts.model ?? config.volcTtsModel,
+        audio_params: {
+          format: 'pcm',
+          sample_rate: this.opts.sampleRate ?? config.volcSampleRate
+        }
+      }
+    };
+    this.ws.send(
+      buildEventFrame(EVENT_START_SESSION, Buffer.from(JSON.stringify(startSessionPayload), 'utf8'), {
+        sessionId: this.sessionId
+      })
+    );
+
+    while (true) {
+      const frame = await waitForFrame(this.queue, this.waiters, 15000);
+      if (frame.msgType === MSG_ERROR) {
+        throw new Error(`Volc TTS session failed: ${frame.errorCode ?? 'unknown'}`);
+      }
+      if (frame.event === EVENT_SESSION_FAILED && frame.sessionId === this.sessionId) {
+        throw new Error(`Volc TTS session failed: ${frame.payload.toString('utf8')}`);
+      }
+      if (frame.event === EVENT_SESSION_STARTED && frame.sessionId === this.sessionId) break;
+    }
+    logger.info('tts session started', { sessionId: this.sessionId });
+  }
+
+  async send(text: string): Promise<void> {
+    if (this.finished || this.signal?.aborted) return;
+    const payload = Buffer.from(JSON.stringify({ req_params: { text } }), 'utf8');
+    this.ws.send(buildEventFrame(EVENT_TASK_REQUEST, payload, { sessionId: this.sessionId }));
+  }
+
+  async close(): Promise<void> {
+    if (this.finished) return;
+    this.finished = true;
+    try {
+      this.ws.send(buildEventFrame(EVENT_FINISH_SESSION, Buffer.from('{}', 'utf8'), { sessionId: this.sessionId }));
+    } catch {
+      // ignore
+    }
+
+    const timeout = setTimeout(() => {
+      this.finishResolve?.();
+    }, 30000);
+    await this.finishPromise.finally(() => clearTimeout(timeout));
+
+    try {
+      if (this.ws.readyState === WebSocket.OPEN) {
+        this.ws.send(buildEventFrame(EVENT_FINISH_CONNECTION, Buffer.from('{}', 'utf8')));
+        await sleep(5);
+      }
+    } catch {
+      // ignore cleanup errors
+    }
+    this.closeSocket();
+    logger.info('tts stream end', { audioFrames: this.audioFrames, audioBytes: this.audioBytes });
+  }
+
+  async *audio(): AsyncGenerator<Buffer> {
+    while (true) {
+      if (this.failed) throw this.failed;
+      if (this.closed && this.queue.length === 0) break;
+
+      const frame = await waitForFrame(this.queue, this.waiters, 30000).catch(() => undefined);
+      if (!frame) {
+        if (this.closed) break;
+        continue;
+      }
+      if (frame.msgType === 0) {
+        if (this.closed) break;
+        continue;
+      }
+      if (frame.msgType === MSG_ERROR) {
+        throw new Error(`Volc TTS stream error: ${frame.errorCode ?? 'unknown'}`);
+      }
+      if (frame.event === EVENT_TTS_RESPONSE && frame.msgType === MSG_AUDIO_ONLY_RESPONSE && frame.sessionId === this.sessionId) {
+        if (frame.payload.length > 0) {
+          this.audioFrames += 1;
+          this.audioBytes += frame.payload.length;
+          if (this.audioFrames % 10 === 0) {
+            logger.debug('tts audio frame', {
+              audioFrames: this.audioFrames,
+              audioBytes: this.audioBytes,
+              lastBytes: frame.payload.length
+            });
+          }
+          yield frame.payload;
+        }
+        continue;
+      }
+      if (frame.event === EVENT_SESSION_FINISHED && frame.sessionId === this.sessionId) {
+        logger.info('tts session finished', { sessionId: this.sessionId, audioFrames: this.audioFrames, audioBytes: this.audioBytes });
+        this.finishResolve?.();
+        break;
+      }
+      if (frame.event === EVENT_SESSION_FAILED && frame.sessionId === this.sessionId) {
+        throw new Error(`Volc TTS session failed: ${frame.payload.toString('utf8')}`);
+      }
+    }
+  }
+
+  private headers() {
+    return {
+      'X-Api-App-Key': this.opts.appKey ?? config.volcAppKey ?? '',
+      'X-Api-Access-Key': this.opts.accessKey ?? config.volcAccessKey ?? '',
+      'X-Api-Resource-Id': this.opts.resourceId ?? config.volcTtsResourceId ?? config.volcResourceId ?? '',
+      'X-Api-Connect-Id': this.opts.connectId ?? config.volcConnectId ?? randomUUID()
+    };
+  }
+
+  private pushFrame(frame: ParsedFrame) {
+    const waiter = this.waiters.shift();
+    if (waiter) {
+      waiter(frame);
+    } else {
+      this.queue.push(frame);
+    }
+  }
+
+  private wakeWaiters() {
+    const noopFrame: ParsedFrame = {
+      msgType: 0,
+      flags: 0,
+      payload: Buffer.alloc(0)
+    };
+    const waiters = this.waiters.splice(0);
+    for (const waiter of waiters) {
+      waiter(noopFrame);
+    }
+  }
+
+  private closeSocket() {
+    if (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING) {
+      this.ws.close();
     }
   }
 }

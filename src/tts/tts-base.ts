@@ -1,6 +1,6 @@
 import { config } from '../config';
 import { VolcTtsClient } from './volc-tts';
-import type { TtsProvider } from './types';
+import type { TtsProvider, TtsStreamSession } from './types';
 
 export class TTSClient {
   private provider: TtsProvider;
@@ -16,12 +16,19 @@ export class TTSClient {
     }
   }
 
+  async openStream(signal?: AbortSignal): Promise<TtsStreamSession> {
+    if (typeof this.provider.openStream !== 'function') {
+      throw new Error('TTS provider does not support streaming');
+    }
+    return this.provider.openStream(signal);
+  }
+
   async close() {
     await this.provider.close();
   }
 }
 
-export type { TtsProvider } from './types';
+export type { TtsProvider, TtsStreamSession } from './types';
 
 function createTtsProvider(): TtsProvider {
   switch (config.ttsProvider) {

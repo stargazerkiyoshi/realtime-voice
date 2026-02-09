@@ -11,6 +11,7 @@ import { logger } from '../observability/logger';
 import { WavWriter } from '../audio/wav-writer';
 import { AsyncQueue } from './async-queue';
 import path from 'node:path';
+import { TtsStreamSession } from '../tts/tts-base'
 
 const nowMs = () => Date.now();
 
@@ -226,28 +227,53 @@ export class Session {
     const llmSignal = this.llmAbort.signal;
     const ttsSignal = this.ttsAbort.signal;
 
-    const ttsQueue = new AsyncQueue<string | null>();
+    let ttsSession: TtsStreamSession | null = null;
+    let ttsAudioTask: Promise<void> | null = null;
+    let ttsQueue: AsyncQueue<string | null> | null = null;
+    let ttsWorker: Promise<void> | null = null;
 
-    const ttsWorker = (async () => {
-      try {
-        while (true) {
-          const chunk = await ttsQueue.next();
-          if (chunk === null) break;
-          logger.info('tts stream start', { sid: this.sessionId, len: chunk.length });
-          for await (const audio of this.tts.stream(chunk, ttsSignal)) {
+    try {
+      ttsSession = await this.tts.openStream(ttsSignal);
+      ttsAudioTask = (async () => {
+        try {
+          for await (const audio of ttsSession!.audio()) {
             await this.playback.put(audio);
           }
-          logger.info('tts stream done', { sid: this.sessionId });
+        } catch {
+          logger.warn('tts stream aborted', { sid: this.sessionId });
         }
-      } catch {
-        logger.warn('tts stream aborted', { sid: this.sessionId });
-      }
-    })();
+      })();
+    } catch (err) {
+      logger.warn('tts streaming not available, fallback to per-chunk', {
+        sid: this.sessionId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+      ttsQueue = new AsyncQueue<string | null>();
+      ttsWorker = (async () => {
+        try {
+          while (true) {
+            const chunk = await ttsQueue!.next();
+            if (chunk === null) break;
+            logger.info('tts stream start', { sid: this.sessionId, len: chunk.length });
+            for await (const audio of this.tts.stream(chunk, ttsSignal)) {
+              await this.playback.put(audio);
+            }
+            logger.info('tts stream done', { sid: this.sessionId });
+          }
+        } catch {
+          logger.warn('tts stream aborted', { sid: this.sessionId });
+        }
+      })();
+    }
 
     const enqueueChunk = async (chunk: string) => {
       if (!chunk) return;
       await this.sendJson({ type: 'assistant', text: chunk });
-      ttsQueue.push(chunk);
+      if (ttsSession) {
+        await ttsSession.send(chunk);
+      } else if (ttsQueue) {
+        ttsQueue.push(chunk);
+      }
     };
 
     try {
@@ -266,10 +292,19 @@ export class Session {
     } catch {
       logger.warn('llm stream aborted', { sid: this.sessionId });
     } finally {
-      ttsQueue.push(null);
+      if (ttsSession) {
+        await ttsSession.close();
+      } else if (ttsQueue) {
+        ttsQueue.push(null);
+      }
     }
 
-    await ttsWorker;
+    if (ttsAudioTask) {
+      await ttsAudioTask;
+    }
+    if (ttsWorker) {
+      await ttsWorker;
+    }
     await this.playback.waitForDrain();
 
     if (this.isEnded()) return;
