@@ -397,7 +397,7 @@ export class VolcAsrClient implements AsrProvider {
 
   async *stream(): AsyncGenerator<AsrPartial | AsrFinal> {
     await this.connect();
-    while (!this.closing) {
+    while (true) {
       if (this.lastError) {
         throw this.lastError;
       }
@@ -407,6 +407,9 @@ export class VolcAsrClient implements AsrProvider {
           yield v;
           continue;
         }
+      }
+      if (this.closing && !this.connected) {
+        break;
       }
       const v = await new Promise<AsrPartial | AsrFinal | undefined>((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error('ASR timeout')), 30000);

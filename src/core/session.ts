@@ -119,6 +119,7 @@ export class Session {
     while (this.fsm.state !== State.ENDED) {
       const { pcm16, tsMs } = await this.inputQueue.next();
 
+      const wasSpeechActive = this.speechActive;
       let vadStarted = false;
       if (this.backendVadEnabled) {
         for (const ev of this.vad.process(pcm16)) {
@@ -145,7 +146,8 @@ export class Session {
         continue;
       }
 
-      if ((this.speechActive || vadStarted) && !this.asrClosing) {
+      const shouldFeed = this.speechActive || vadStarted || wasSpeechActive;
+      if (shouldFeed && !this.asrClosing) {
         this.ensureAsrLoop();
         await this.asr.feed(pcm16);
       }
