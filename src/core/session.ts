@@ -11,11 +11,21 @@ import { logger } from '../observability/logger';
 import { WavWriter } from '../audio/wav-writer';
 import { AsyncQueue } from './async-queue';
 import path from 'node:path';
-import { TtsStreamSession } from '../tts/tts-base'
+import { TtsStreamSession } from '../tts/tts-base';
 
 const nowMs = () => Date.now();
 
 type SendJson = (payload: Record<string, unknown>) => Promise<void>;
+
+type LatencyMark = {
+  utteranceId: number;
+  vadSpeechEndMs?: number;
+  asrFinalMs?: number;
+  assistantFirstMs?: number;
+  ttsFirstAudioMs?: number;
+  playbackFirstMs?: number;
+  asrFinalTextLen?: number;
+};
 
 export class Session {
   sessionId: string;
@@ -27,7 +37,7 @@ export class Session {
   private vad = new SimpleEnergyVAD(16000, 10);
   private llm = new LLMClient();
   private tts = new TTSClient();
-  private chunker = new Chunker();
+  private chunker = new Chunker({ firstMinChars: 2, minChars: 14, maxChars: 40 });
   private asr = new AsrClient();
 
   private playback = new PlaybackQueue();
@@ -52,6 +62,9 @@ export class Session {
   private ttsChunks = 0;
   private wavWriter: WavWriter | null = null;
   private recordPath: string | null = null;
+  private lastSpeechEndMs: number | null = null;
+  private perfSeq = 0;
+  private playbackMark: { runId: number; mark: LatencyMark } | null = null;
 
   constructor(sessionId: string, sendJson: SendJson) {
     this.sessionId = sessionId;
@@ -72,6 +85,7 @@ export class Session {
     logger.info('session stop requested', { sid: this.sessionId, reason });
     this.fsm.state = State.ENDED;
     this.clearVadEndTimer();
+    this.playbackMark = null;
     this.interruptAssistant('session_end');
     try {
       await this.sendJson({ type: 'end', reason });
@@ -135,6 +149,7 @@ export class Session {
             }
           } else if (ev === 'speech_end') {
             this.speechActive = false;
+            this.lastSpeechEndMs = tsMs;
             await this.sendJson({ type: 'vad', event: 'speech_end', ts_ms: tsMs });
             this.scheduleVadEnd();
           }
@@ -209,10 +224,18 @@ export class Session {
     this.ctx.turnId += 1;
     this.ctx.history.push({ role: 'user', content: text });
 
-    void this.runAssistant(text);
+    const perf: LatencyMark = {
+      utteranceId: ++this.perfSeq,
+      vadSpeechEndMs: this.lastSpeechEndMs ?? undefined,
+      asrFinalMs: nowMs(),
+      asrFinalTextLen: text.length
+    };
+    this.lastSpeechEndMs = null;
+
+    void this.runAssistant(text, perf);
   }
 
-  private async runAssistant(text: string) {
+  private async runAssistant(text: string, perf?: LatencyMark) {
     if (this.fsm.state === State.ENDED) return;
     const runId = ++this.assistantRunId;
 
@@ -227,6 +250,11 @@ export class Session {
     const llmSignal = this.llmAbort.signal;
     const ttsSignal = this.ttsAbort.signal;
 
+    const perfMark = perf;
+    if (perfMark) {
+      this.playbackMark = { runId, mark: perfMark };
+    }
+
     let ttsSession: TtsStreamSession | null = null;
     let ttsAudioTask: Promise<void> | null = null;
     let ttsQueue: AsyncQueue<string | null> | null = null;
@@ -237,6 +265,9 @@ export class Session {
       ttsAudioTask = (async () => {
         try {
           for await (const audio of ttsSession!.audio()) {
+            if (perfMark && !perfMark.ttsFirstAudioMs) {
+              perfMark.ttsFirstAudioMs = nowMs();
+            }
             await this.playback.put(audio);
           }
         } catch {
@@ -256,6 +287,9 @@ export class Session {
             if (chunk === null) break;
             logger.info('tts stream start', { sid: this.sessionId, len: chunk.length });
             for await (const audio of this.tts.stream(chunk, ttsSignal)) {
+              if (perfMark && !perfMark.ttsFirstAudioMs) {
+                perfMark.ttsFirstAudioMs = nowMs();
+              }
               await this.playback.put(audio);
             }
             logger.info('tts stream done', { sid: this.sessionId });
@@ -266,8 +300,13 @@ export class Session {
       })();
     }
 
+    let assistantText = '';
     const enqueueChunk = async (chunk: string) => {
       if (!chunk) return;
+      assistantText += chunk;
+      if (perfMark && !perfMark.assistantFirstMs) {
+        perfMark.assistantFirstMs = nowMs();
+      }
       await this.sendJson({ type: 'assistant', text: chunk });
       if (ttsSession) {
         await ttsSession.send(chunk);
@@ -308,7 +347,19 @@ export class Session {
     await this.playback.waitForDrain();
 
     if (this.isEnded()) return;
-    if (runId !== this.assistantRunId) return;
+    if (runId !== this.assistantRunId || llmSignal.aborted) return;
+
+    const trimmedAssistant = assistantText.trim();
+    if (trimmedAssistant.length > 0) {
+      this.ctx.history.push({ role: 'assistant', content: trimmedAssistant });
+    }
+
+    if (perfMark) {
+      this.emitLatencyMetric(perfMark);
+      if (this.playbackMark?.runId === runId) {
+        this.playbackMark = null;
+      }
+    }
 
     this.fsm.state = State.LISTENING;
   }
@@ -323,6 +374,7 @@ export class Session {
     this.assistantRunId += 1;
     this.chunker.flush();
     this.playback.stopAndClear();
+    this.playbackMark = null;
     if (this.llmAbort) this.llmAbort.abort();
     if (this.ttsAbort) this.ttsAbort.abort();
     if (reason === 'barge_in') {
@@ -334,6 +386,11 @@ export class Session {
     while (this.fsm.state !== State.ENDED) {
       const audio = await this.playback.get();
       if (this.playback.isStopped()) continue;
+      if (this.playbackMark && this.playbackMark.runId === this.assistantRunId) {
+        if (!this.playbackMark.mark.playbackFirstMs) {
+          this.playbackMark.mark.playbackFirstMs = nowMs();
+        }
+      }
       this.ttsChunks += 1;
       if (this.ttsChunks % 10 === 0) {
         logger.debug('session playback chunk', { sid: this.sessionId, chunks: this.ttsChunks, bytes: audio.length });
@@ -346,6 +403,36 @@ export class Session {
         payload_b64: audio.toString('base64')
       });
     }
+  }
+
+  private emitLatencyMetric(mark: LatencyMark) {
+    const diff = (start?: number, end?: number) => {
+      if (typeof start !== 'number' || typeof end !== 'number') return undefined;
+      if (end < start) return undefined;
+      return end - start;
+    };
+
+    const payload: Record<string, unknown> = {
+      metric_type: 'perf_latency',
+      sid: this.sessionId,
+      utterance_id: mark.utteranceId,
+      vad_speech_end_ms: mark.vadSpeechEndMs,
+      asr_final_ms: mark.asrFinalMs,
+      assistant_first_ms: mark.assistantFirstMs,
+      tts_first_audio_ms: mark.ttsFirstAudioMs,
+      playback_first_ms: mark.playbackFirstMs,
+      asr_final_text_len: mark.asrFinalTextLen,
+      speech_end_to_asr_final_ms: diff(mark.vadSpeechEndMs, mark.asrFinalMs),
+      asr_final_to_assistant_first_ms: diff(mark.asrFinalMs, mark.assistantFirstMs),
+      assistant_first_to_tts_first_ms: diff(mark.assistantFirstMs, mark.ttsFirstAudioMs),
+      speech_end_to_tts_first_ms: diff(mark.vadSpeechEndMs, mark.ttsFirstAudioMs),
+      asr_final_to_tts_first_ms: diff(mark.asrFinalMs, mark.ttsFirstAudioMs),
+      speech_end_to_playback_first_ms: diff(mark.vadSpeechEndMs, mark.playbackFirstMs),
+      asr_final_to_playback_first_ms: diff(mark.asrFinalMs, mark.playbackFirstMs),
+      ts_ms: nowMs()
+    };
+
+    logger.info(JSON.stringify(payload));
   }
 
   private summarizePcm(pcm16: Buffer) {
