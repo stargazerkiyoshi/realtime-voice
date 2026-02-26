@@ -6,3 +6,5 @@ logs/
 dist/
 openspec/digest.local.md
 start.local.sh
+
+start.local.sh
