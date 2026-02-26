@@ -1,9 +1,12 @@
 ---
-name: OpenSpec: Proposal
-description: Scaffold a new OpenSpec change and validate strictly.
-category: OpenSpec
-tags: [openspec, change]
+description: 搭建新的OpenSpec变更提案并进行严格验证。
 ---
+
+The user has requested the following change proposal. Use the openspec instructions to create their change proposal.
+
+<UserRequest>
+  $ARGUMENTS
+</UserRequest>
 <!-- OPENSPEC:START -->
 **护栏规则**
 - 优先使用简单、最小的实现，仅在请求或明确需要时才添加复杂性。

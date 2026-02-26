@@ -1,8 +1,12 @@
 ---
-description: Implement an approved OpenSpec change and keep tasks in sync.
+description: 实施已批准的OpenSpec变更并保持任务同步。
 ---
 
-$ARGUMENTS
+The user wants to apply the following change. Use the openspec instructions to implement the approved change.
+
+<ChangeId>
+  $ARGUMENTS
+</ChangeId>
 <!-- OPENSPEC:START -->
 **护栏规则**
 - 优先使用简单、最小的实现，仅在请求或明确需要时才添加复杂性。
