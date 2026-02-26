@@ -4,3 +4,5 @@ scripts/start.local.ps1
 scripts/start.local.sh
 logs/
 dist/
+openspec/digest.local.md
+start.local.sh
