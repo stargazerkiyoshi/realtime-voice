@@ -8,3 +8,5 @@ openspec/digest.local.md
 start.local.sh
 
 start.local.sh
+
+scripts/start.local.sh
