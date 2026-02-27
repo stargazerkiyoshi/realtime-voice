@@ -1,4 +1,4 @@
-## 1. Implementation
+## 1. 实施
 - [ ] 配置支持：在 `config.ts` 增加前端/后端 VAD 开关及默认值（后端 VAD 开启，前端 VAD 可选）。
 - [ ] Session 读取配置：`session.ts` 根据配置决定是否在 LISTENING 阶段对上行音频做 VAD gating；若关闭则直送 ASR。
 - [ ] 文档更新：前端采集建议（AEC/NS/AGC 约束、AudioWorklet、采样率）、双 VAD 配置矩阵、默认推荐值。

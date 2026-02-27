@@ -1,5 +1,5 @@
 ## ADDED Requirements
-### Requirement: Turn Lifecycle & FSM 稳定
+### Requirement: 轮次生命周期与 FSM 稳定性
 系统 SHALL 以显式轮次驱动通话状态机：speech_start → speech_end → 生成/播放回复 → 回到监听；闲置或超时只结束本轮，不终止 session。
 
 #### Scenario: 正常轮次

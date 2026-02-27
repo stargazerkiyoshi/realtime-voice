@@ -1,180 +1,180 @@
-# OpenSpec Instructions
+# OpenSpec 使用说明
 
-Instructions for AI coding assistants using OpenSpec for spec-driven development.
+面向使用 OpenSpec 进行规范驱动开发的 AI 编码助手说明。
 
-## TL;DR Quick Checklist
+## 快速检查清单（TL;DR）
 
-- Search existing work: `openspec spec list --long`, `openspec list` (use `rg` only for full-text search)
-- Decide scope: new capability vs modify existing capability
-- Pick a unique `change-id`: kebab-case, verb-led (`add-`, `update-`, `remove-`, `refactor-`)
-- Scaffold: `proposal.md`, `tasks.md`, `design.md` (only if needed), and delta specs per affected capability
-- Write deltas: use `## ADDED|MODIFIED|REMOVED|RENAMED Requirements`; include at least one `#### Scenario:` per requirement
-- Validate: `openspec validate [change-id] --strict --no-interactive` and fix issues
-- Request approval: Do not start implementation until proposal is approved
+- 搜索现有工作：`openspec spec list --long`、`openspec list`（仅在全文检索时使用 `rg`）
+- 判定范围：是新增能力，还是修改现有能力
+- 选择唯一 `change-id`：kebab-case、动词前缀（`add-`、`update-`、`remove-`、`refactor-`）
+- 搭建骨架：`proposal.md`、`tasks.md`、`design.md`（按需）以及受影响能力对应的 spec delta
+- 编写 delta：使用 `## ADDED|MODIFIED|REMOVED|RENAMED Requirements`，每条 requirement 至少包含一个 `#### Scenario:`
+- 校验：运行 `openspec validate [change-id] --strict --no-interactive` 并修复问题
+- 请求审批：提案获批前不要开始实施
 
-## Three-Stage Workflow
+## 三阶段工作流
 
-### Stage 1: Creating Changes
-Create proposal when you need to:
-- Add features or functionality
-- Make breaking changes (API, schema)
-- Change architecture or patterns  
-- Optimize performance (changes behavior)
-- Update security patterns
+### 阶段 1：创建变更
+在以下情况需要创建提案：
+- 新增特性或功能
+- 引入破坏性变更（API、数据结构等）
+- 调整架构或设计模式
+- 性能优化且会改变行为
+- 更新安全模式
 
-Triggers (examples):
+触发词（示例）：
 - "Help me create a change proposal"
 - "Help me plan a change"
 - "Help me create a proposal"
 - "I want to create a spec proposal"
 - "I want to create a spec"
 
-Loose matching guidance:
-- Contains one of: `proposal`, `change`, `spec`
-- With one of: `create`, `plan`, `make`, `start`, `help`
+宽松匹配规则：
+- 包含以下任一词：`proposal`、`change`、`spec`
+- 且同时包含：`create`、`plan`、`make`、`start`、`help` 之一
 
-Skip proposal for:
-- Bug fixes (restore intended behavior)
-- Typos, formatting, comments
-- Dependency updates (non-breaking)
-- Configuration changes
-- Tests for existing behavior
+以下场景可跳过提案：
+- Bug 修复（恢复既有预期行为）
+- 拼写、格式、注释类修改
+- 依赖升级（非破坏性）
+- 配置变更
+- 仅补充现有行为测试
 
-**Workflow**
-1. Review `openspec/project.md`, `openspec list`, and `openspec list --specs` to understand current context.
-2. Choose a unique verb-led `change-id` and scaffold `proposal.md`, `tasks.md`, optional `design.md`, and spec deltas under `openspec/changes/<id>/`.
-3. Draft spec deltas using `## ADDED|MODIFIED|REMOVED Requirements` with at least one `#### Scenario:` per requirement.
-4. Run `openspec validate <id> --strict --no-interactive` and resolve any issues before sharing the proposal.
+**工作流程**
+1. 阅读 `openspec/project.md`、`openspec list`、`openspec list --specs` 了解当前上下文。
+2. 选择唯一且动词开头的 `change-id`，并在 `openspec/changes/<id>/` 下搭建 `proposal.md`、`tasks.md`、可选 `design.md` 与 spec delta。
+3. 按 `## ADDED|MODIFIED|REMOVED Requirements` 编写 delta，每条 requirement 至少包含一个 `#### Scenario:`。
+4. 运行 `openspec validate <id> --strict --no-interactive` 并修复问题后再共享提案。
 
-### Stage 2: Implementing Changes
-Track these steps as TODOs and complete them one by one.
-1. **Read proposal.md** - Understand what's being built
-2. **Read design.md** (if exists) - Review technical decisions
-3. **Read tasks.md** - Get implementation checklist
-4. **Implement tasks sequentially** - Complete in order
-5. **Confirm completion** - Ensure every item in `tasks.md` is finished before updating statuses
-6. **Update checklist** - After all work is done, set every task to `- [x]` so the list reflects reality
-7. **Approval gate** - Do not start implementation until the proposal is reviewed and approved
+### 阶段 2：实施变更
+将以下步骤作为 TODO 并逐项完成。
+1. **阅读 proposal.md** - 理解要构建的内容
+2. **阅读 design.md**（如存在）- 理解技术决策
+3. **阅读 tasks.md** - 获取实施清单
+4. **按顺序实施任务** - 逐项完成
+5. **确认完成情况** - 更新状态前确保 `tasks.md` 中每项都已完成
+6. **更新清单勾选** - 全部完成后将任务设为 `- [x]`，保证列表真实反映状态
+7. **审批门禁** - 提案评审并批准前不要开始实施
 
-### Stage 3: Archiving Changes
-After deployment, create separate PR to:
-- Move `changes/[name]/` → `changes/archive/YYYY-MM-DD-[name]/`
-- Update `specs/` if capabilities changed
-- Use `openspec archive <change-id> --skip-specs --yes` for tooling-only changes (always pass the change ID explicitly)
-- Run `openspec validate --strict --no-interactive` to confirm the archived change passes checks
+### 阶段 3：归档变更
+部署后，创建独立 PR 用于：
+- 将 `changes/[name]/` 移动到 `changes/archive/YYYY-MM-DD-[name]/`
+- 若能力有变，更新 `specs/`
+- 对仅工具链变更使用 `openspec archive <change-id> --skip-specs --yes`（务必显式传入 change ID）
+- 运行 `openspec validate --strict --no-interactive` 确认归档后通过校验
 
-## Before Any Task
+## 开始任何任务前
 
-**Context Checklist:**
-- [ ] Read relevant specs in `specs/[capability]/spec.md`
-- [ ] Check pending changes in `changes/` for conflicts
-- [ ] Read `openspec/project.md` for conventions
-- [ ] Run `openspec list` to see active changes
-- [ ] Run `openspec list --specs` to see existing capabilities
+**上下文检查清单：**
+- [ ] 阅读 `specs/[capability]/spec.md` 中相关规范
+- [ ] 检查 `changes/` 中待处理变更是否冲突
+- [ ] 阅读 `openspec/project.md` 了解项目约定
+- [ ] 运行 `openspec list` 查看活动变更
+- [ ] 运行 `openspec list --specs` 查看现有能力
 
-**Before Creating Specs:**
-- Always check if capability already exists
-- Prefer modifying existing specs over creating duplicates
-- Use `openspec show [spec]` to review current state
-- If request is ambiguous, ask 1–2 clarifying questions before scaffolding
+**创建规范前：**
+- 先确认能力是否已存在
+- 优先修改现有规范，避免重复创建
+- 使用 `openspec show [spec]` 查看当前状态
+- 若需求不明确，搭建前先问 1-2 个澄清问题
 
-### Search Guidance
-- Enumerate specs: `openspec spec list --long` (or `--json` for scripts)
-- Enumerate changes: `openspec list` (or `openspec change list --json` - deprecated but available)
-- Show details:
-  - Spec: `openspec show <spec-id> --type spec` (use `--json` for filters)
-  - Change: `openspec show <change-id> --json --deltas-only`
-- Full-text search (use ripgrep): `rg -n "Requirement:|Scenario:" openspec/specs`
+### 检索指引
+- 枚举规范：`openspec spec list --long`（脚本场景可用 `--json`）
+- 枚举变更：`openspec list`（或 `openspec change list --json`，已废弃但可用）
+- 查看详情：
+  - 规范：`openspec show <spec-id> --type spec`（筛选时可用 `--json`）
+  - 变更：`openspec show <change-id> --json --deltas-only`
+- 全文检索（使用 ripgrep）：`rg -n "Requirement:|Scenario:" openspec/specs`
 
-## Quick Start
+## 快速开始
 
-### CLI Commands
+### CLI 命令
 
 ```bash
-# Essential commands
-openspec list                  # List active changes
-openspec list --specs          # List specifications
-openspec show [item]           # Display change or spec
-openspec validate [item]       # Validate changes or specs
-openspec archive <change-id> [--yes|-y]   # Archive after deployment (add --yes for non-interactive runs)
+# 核心命令
+openspec list                  # 列出活动变更
+openspec list --specs          # 列出规范
+openspec show [item]           # 显示 change 或 spec
+openspec validate [item]       # 校验 change 或 spec
+openspec archive <change-id> [--yes|-y]   # 部署后归档（非交互场景加 --yes）
 
-# Project management
-openspec init [path]           # Initialize OpenSpec
-openspec update [path]         # Update instruction files
+# 项目管理
+openspec init [path]           # 初始化 OpenSpec
+openspec update [path]         # 更新说明文件
 
-# Interactive mode
-openspec show                  # Prompts for selection
-openspec validate              # Bulk validation mode
+# 交互模式
+openspec show                  # 交互式选择
+openspec validate              # 批量校验模式
 
-# Debugging
+# 调试
 openspec show [change] --json --deltas-only
 openspec validate [change] --strict --no-interactive
 ```
 
-### Command Flags
+### 命令参数
 
-- `--json` - Machine-readable output
-- `--type change|spec` - Disambiguate items
-- `--strict` - Comprehensive validation
-- `--no-interactive` - Disable prompts
-- `--skip-specs` - Archive without spec updates
-- `--yes`/`-y` - Skip confirmation prompts (non-interactive archive)
+- `--json` - 机器可读输出
+- `--type change|spec` - 消除对象歧义
+- `--strict` - 严格全面校验
+- `--no-interactive` - 禁用交互提示
+- `--skip-specs` - 归档时跳过 spec 更新
+- `--yes`/`-y` - 跳过确认提示（非交互归档）
 
-## Directory Structure
+## 目录结构
 
 ```
 openspec/
-├── project.md              # Project conventions
-├── specs/                  # Current truth - what IS built
-│   └── [capability]/       # Single focused capability
-│       ├── spec.md         # Requirements and scenarios
-│       └── design.md       # Technical patterns
-├── changes/                # Proposals - what SHOULD change
+├── project.md              # 项目约定
+├── specs/                  # 当前事实：已经构建的内容
+│   └── [capability]/       # 单一聚焦能力
+│       ├── spec.md         # 需求与场景
+│       └── design.md       # 技术模式
+├── changes/                # 提案：计划变更的内容
 │   ├── [change-name]/
-│   │   ├── proposal.md     # Why, what, impact
-│   │   ├── tasks.md        # Implementation checklist
-│   │   ├── design.md       # Technical decisions (optional; see criteria)
-│   │   └── specs/          # Delta changes
+│   │   ├── proposal.md     # 为什么改、改什么、影响面
+│   │   ├── tasks.md        # 实施清单
+│   │   ├── design.md       # 技术决策（可选；见判定条件）
+│   │   └── specs/          # Delta 变更
 │   │       └── [capability]/
 │   │           └── spec.md # ADDED/MODIFIED/REMOVED
-│   └── archive/            # Completed changes
+│   └── archive/            # 已完成变更
 ```
 
-## Creating Change Proposals
+## 创建变更提案
 
-### Decision Tree
+### 决策树
 
 ```
-New request?
-├─ Bug fix restoring spec behavior? → Fix directly
-├─ Typo/format/comment? → Fix directly  
-├─ New feature/capability? → Create proposal
-├─ Breaking change? → Create proposal
-├─ Architecture change? → Create proposal
-└─ Unclear? → Create proposal (safer)
+新需求？
+├─ 是恢复既有规范行为的 bug 修复？→ 直接修复
+├─ 是拼写/格式/注释？→ 直接修复
+├─ 是新增功能/能力？→ 创建提案
+├─ 是破坏性变更？→ 创建提案
+├─ 是架构调整？→ 创建提案
+└─ 需求不明确？→ 创建提案（更安全）
 ```
 
-### Proposal Structure
+### 提案结构
 
-1. **Create directory:** `changes/[change-id]/` (kebab-case, verb-led, unique)
+1. **创建目录：**`changes/[change-id]/`（kebab-case、动词前缀、保证唯一）
 
-2. **Write proposal.md:**
+2. **编写 proposal.md：**
 ```markdown
-# Change: [Brief description of change]
+# 变更：[简要描述]
 
-## Why
-[1-2 sentences on problem/opportunity]
+## 为什么
+[用 1-2 句话描述问题/机会]
 
-## What Changes
-- [Bullet list of changes]
-- [Mark breaking changes with **BREAKING**]
+## 变更内容
+- [列出变更点]
+- [破坏性变更请用 **BREAKING** 标注]
 
-## Impact
-- Affected specs: [list capabilities]
-- Affected code: [key files/systems]
+## 影响
+- Affected specs: [受影响能力列表]
+- Affected code: [关键文件/系统]
 ```
 
-3. **Create spec deltas:** `specs/[capability]/spec.md`
+3. **创建 spec delta：**`specs/[capability]/spec.md`
 ```markdown
 ## ADDED Requirements
 ### Requirement: New Feature
@@ -193,116 +193,116 @@ The system SHALL provide...
 **Reason**: [Why removing]
 **Migration**: [How to handle]
 ```
-If multiple capabilities are affected, create multiple delta files under `changes/[change-id]/specs/<capability>/spec.md`—one per capability.
+如果影响多个 capability，请在 `changes/[change-id]/specs/<capability>/spec.md` 下分别创建多个 delta 文件（每个 capability 一个）。
 
-4. **Create tasks.md:**
+4. **创建 tasks.md：**
 ```markdown
-## 1. Implementation
-- [ ] 1.1 Create database schema
-- [ ] 1.2 Implement API endpoint
-- [ ] 1.3 Add frontend component
-- [ ] 1.4 Write tests
+## 1. 实施
+- [ ] 1.1 创建数据库结构
+- [ ] 1.2 实现 API 接口
+- [ ] 1.3 新增前端组件
+- [ ] 1.4 编写测试
 ```
 
-5. **Create design.md when needed:**
-Create `design.md` if any of the following apply; otherwise omit it:
-- Cross-cutting change (multiple services/modules) or a new architectural pattern
-- New external dependency or significant data model changes
-- Security, performance, or migration complexity
-- Ambiguity that benefits from technical decisions before coding
+5. **按需创建 design.md：**
+若满足以下任一条件请创建 `design.md`，否则可省略：
+- 跨模块/跨服务改动，或引入新的架构模式
+- 新外部依赖，或较大的数据模型变更
+- 涉及安全、性能或迁移复杂度
+- 在编码前需要先明确技术决策
 
-Minimal `design.md` skeleton:
+最小 `design.md` 骨架：
 ```markdown
-## Context
-[Background, constraints, stakeholders]
+## 背景
+[背景、约束、相关方]
 
-## Goals / Non-Goals
-- Goals: [...]
-- Non-Goals: [...]
+## 目标 / 非目标
+- 目标：[]
+- 非目标：[]
 
-## Decisions
-- Decision: [What and why]
-- Alternatives considered: [Options + rationale]
+## 决策
+- 决策：[做什么、为什么]
+- 备选方案：[选项 + 取舍原因]
 
-## Risks / Trade-offs
-- [Risk] → Mitigation
+## 风险 / 取舍
+- [风险] → [缓解措施]
 
-## Migration Plan
-[Steps, rollback]
+## 迁移计划
+[步骤、回滚方案]
 
-## Open Questions
+## 未决问题
 - [...]
 ```
 
-## Spec File Format
+## 规范文件格式
 
-### Critical: Scenario Formatting
+### 关键：Scenario 格式
 
-**CORRECT** (use #### headers):
+**正确示例**（使用 `####` 标题）:
 ```markdown
-#### Scenario: User login success
-- **WHEN** valid credentials provided
-- **THEN** return JWT token
+#### Scenario: 用户登录成功
+- **WHEN** 提供有效凭据
+- **THEN** 返回 JWT token
 ```
 
-**WRONG** (don't use bullets or bold):
+**错误示例**（不要用列表或加粗充当场景标题）:
 ```markdown
 - **Scenario: User login**  ❌
 **Scenario**: User login     ❌
 ### Scenario: User login      ❌
 ```
 
-Every requirement MUST have at least one scenario.
+每条 requirement 必须至少包含一个 scenario。
 
-### Requirement Wording
-- Use SHALL/MUST for normative requirements (avoid should/may unless intentionally non-normative)
+### Requirement 写法
+- 规范性 requirement 使用 SHALL/MUST（除非有意写成非规范性表述，否则避免 should/may）
 
-### Delta Operations
+### Delta 操作
 
-- `## ADDED Requirements` - New capabilities
-- `## MODIFIED Requirements` - Changed behavior
-- `## REMOVED Requirements` - Deprecated features
-- `## RENAMED Requirements` - Name changes
+- `## ADDED Requirements` - 新增能力
+- `## MODIFIED Requirements` - 行为变更
+- `## REMOVED Requirements` - 废弃能力
+- `## RENAMED Requirements` - 名称变更
 
-Headers matched with `trim(header)` - whitespace ignored.
+Header 按 `trim(header)` 匹配，即忽略首尾空白。
 
-#### When to use ADDED vs MODIFIED
-- ADDED: Introduces a new capability or sub-capability that can stand alone as a requirement. Prefer ADDED when the change is orthogonal (e.g., adding "Slash Command Configuration") rather than altering the semantics of an existing requirement.
-- MODIFIED: Changes the behavior, scope, or acceptance criteria of an existing requirement. Always paste the full, updated requirement content (header + all scenarios). The archiver will replace the entire requirement with what you provide here; partial deltas will drop previous details.
-- RENAMED: Use when only the name changes. If you also change behavior, use RENAMED (name) plus MODIFIED (content) referencing the new name.
+#### 何时使用 ADDED 与 MODIFIED
+- ADDED：引入可以独立成立的新能力或子能力。若变更与现有 requirement 语义正交（例如新增 “Slash Command Configuration”），优先使用 ADDED。
+- MODIFIED：修改现有 requirement 的行为、范围或验收标准。务必粘贴完整、更新后的 requirement 内容（header + 全部 scenarios）。归档器会用你提供的内容替换整条 requirement；部分 delta 会导致旧细节丢失。
+- RENAMED：仅名称变化时使用。若同时改行为，应使用 RENAMED（改名）+ MODIFIED（改内容，引用新名称）。
 
-Common pitfall: Using MODIFIED to add a new concern without including the previous text. This causes loss of detail at archive time. If you aren’t explicitly changing the existing requirement, add a new requirement under ADDED instead.
+常见陷阱：使用 MODIFIED 添加新关注点却没有包含旧文本。这会在归档时丢失细节。若你不是显式修改现有 requirement，请改为在 ADDED 下新增 requirement。
 
-Authoring a MODIFIED requirement correctly:
-1) Locate the existing requirement in `openspec/specs/<capability>/spec.md`.
-2) Copy the entire requirement block (from `### Requirement: ...` through its scenarios).
-3) Paste it under `## MODIFIED Requirements` and edit to reflect the new behavior.
-4) Ensure the header text matches exactly (whitespace-insensitive) and keep at least one `#### Scenario:`.
+正确编写 MODIFIED requirement：
+1) 在 `openspec/specs/<capability>/spec.md` 中定位现有 requirement。
+2) 复制整段 requirement（从 `### Requirement: ...` 到其全部 scenarios）。
+3) 粘贴到 `## MODIFIED Requirements` 下，并按新行为编辑。
+4) 确保 header 文本精确匹配（忽略空白差异），并至少保留一个 `#### Scenario:`。
 
-Example for RENAMED:
+RENAMED 示例：
 ```markdown
 ## RENAMED Requirements
 - FROM: `### Requirement: Login`
 - TO: `### Requirement: User Authentication`
 ```
 
-## Troubleshooting
+## 故障排查
 
-### Common Errors
+### 常见错误
 
-**"Change must have at least one delta"**
-- Check `changes/[name]/specs/` exists with .md files
-- Verify files have operation prefixes (## ADDED Requirements)
+**“Change must have at least one delta”**
+- 检查 `changes/[name]/specs/` 是否存在且包含 .md 文件
+- 检查文件是否包含操作前缀（如 `## ADDED Requirements`）
 
-**"Requirement must have at least one scenario"**
-- Check scenarios use `#### Scenario:` format (4 hashtags)
-- Don't use bullet points or bold for scenario headers
+**“Requirement must have at least one scenario”**
+- 检查 scenario 是否使用 `#### Scenario:` 格式（4 个 `#`）
+- 不要用列表项或加粗文本替代 scenario 标题
 
-**Silent scenario parsing failures**
-- Exact format required: `#### Scenario: Name`
-- Debug with: `openspec show [change] --json --deltas-only`
+**scenario 被静默解析失败**
+- 必须严格使用：`#### Scenario: Name`
+- 可用 `openspec show [change] --json --deltas-only` 调试
 
-### Validation Tips
+### 校验建议
 
 ```bash
 # Always use strict mode for comprehensive checks
@@ -315,7 +315,7 @@ openspec show [change] --json | jq '.deltas'
 openspec show [spec] --json -r 1
 ```
 
-## Happy Path Script
+## 标准流程脚本
 
 ```bash
 # 1) Explore current state
@@ -346,7 +346,7 @@ EOF
 openspec validate $CHANGE --strict --no-interactive
 ```
 
-## Multi-Capability Example
+## 多能力示例
 
 ```
 openspec/changes/add-2fa-notify/
@@ -373,84 +373,84 @@ notifications/spec.md
 ...
 ```
 
-## Best Practices
+## 最佳实践
 
-### Simplicity First
-- Default to <100 lines of new code
-- Single-file implementations until proven insufficient
-- Avoid frameworks without clear justification
-- Choose boring, proven patterns
+### 简洁优先
+- 新增代码默认控制在 100 行以内
+- 在证据不足前优先单文件实现
+- 无明确收益时避免引入新框架
+- 选择成熟稳定的方案
 
-### Complexity Triggers
-Only add complexity with:
-- Performance data showing current solution too slow
-- Concrete scale requirements (>1000 users, >100MB data)
-- Multiple proven use cases requiring abstraction
+### 复杂度触发条件
+仅在以下情况下引入复杂度：
+- 有性能数据证明现方案过慢
+- 有明确规模要求（>1000 用户、>100MB 数据）
+- 有多个已验证场景需要抽象
 
-### Clear References
-- Use `file.ts:42` format for code locations
-- Reference specs as `specs/auth/spec.md`
-- Link related changes and PRs
+### 清晰引用
+- 代码位置使用 `file.ts:42` 格式
+- 规范引用使用 `specs/auth/spec.md`
+- 关联相关 change 和 PR
 
-### Capability Naming
-- Use verb-noun: `user-auth`, `payment-capture`
-- Single purpose per capability
-- 10-minute understandability rule
-- Split if description needs "AND"
+### 能力命名
+- 使用动词-名词命名：`user-auth`、`payment-capture`
+- 每个 capability 聚焦单一目的
+- 遵循“10 分钟可理解”原则
+- 描述中出现 “AND” 时考虑拆分
 
-### Change ID Naming
-- Use kebab-case, short and descriptive: `add-two-factor-auth`
-- Prefer verb-led prefixes: `add-`, `update-`, `remove-`, `refactor-`
-- Ensure uniqueness; if taken, append `-2`, `-3`, etc.
+### Change ID 命名
+- 使用 kebab-case，简短且可描述：`add-two-factor-auth`
+- 优先使用动词前缀：`add-`、`update-`、`remove-`、`refactor-`
+- 确保唯一；若冲突可追加 `-2`、`-3` 等
 
-## Tool Selection Guide
+## 工具选择指南
 
-| Task | Tool | Why |
+| 任务 | 工具 | 原因 |
 |------|------|-----|
-| Find files by pattern | Glob | Fast pattern matching |
-| Search code content | Grep | Optimized regex search |
-| Read specific files | Read | Direct file access |
-| Explore unknown scope | Task | Multi-step investigation |
+| 按模式找文件 | Glob | 快速模式匹配 |
+| 搜索代码内容 | Grep | 优化的正则检索 |
+| 读取指定文件 | Read | 直接文件访问 |
+| 探索未知范围 | Task | 多步骤调查 |
 
-## Error Recovery
+## 错误恢复
 
-### Change Conflicts
-1. Run `openspec list` to see active changes
-2. Check for overlapping specs
-3. Coordinate with change owners
-4. Consider combining proposals
+### 变更冲突
+1. 运行 `openspec list` 查看活动变更
+2. 检查是否存在重叠规格
+3. 与变更负责人协调
+4. 评估是否合并提案
 
-### Validation Failures
-1. Run with `--strict` flag
-2. Check JSON output for details
-3. Verify spec file format
-4. Ensure scenarios properly formatted
+### 校验失败
+1. 使用 `--strict` 运行
+2. 查看 JSON 输出定位细节
+3. 校验 spec 文件格式
+4. 确保 scenario 格式正确
 
-### Missing Context
-1. Read project.md first
-2. Check related specs
-3. Review recent archives
-4. Ask for clarification
+### 上下文缺失
+1. 先阅读 `project.md`
+2. 检查相关 specs
+3. 查看近期归档
+4. 请求澄清
 
-## Quick Reference
+## 快速参考
 
-### Stage Indicators
-- `changes/` - Proposed, not yet built
-- `specs/` - Built and deployed
-- `archive/` - Completed changes
+### 阶段指示
+- `changes/` - 已提案，尚未构建
+- `specs/` - 已实现并部署
+- `archive/` - 已完成变更
 
-### File Purposes
-- `proposal.md` - Why and what
-- `tasks.md` - Implementation steps
-- `design.md` - Technical decisions
-- `spec.md` - Requirements and behavior
+### 文件用途
+- `proposal.md` - 为什么做、要做什么
+- `tasks.md` - 实施步骤
+- `design.md` - 技术决策
+- `spec.md` - 需求与行为
 
-### CLI Essentials
+### CLI 关键命令
 ```bash
-openspec list              # What's in progress?
-openspec show [item]       # View details
-openspec validate --strict --no-interactive  # Is it correct?
-openspec archive <change-id> [--yes|-y]  # Mark complete (add --yes for automation)
+openspec list              # 当前在推进什么？
+openspec show [item]       # 查看详情
+openspec validate --strict --no-interactive  # 是否正确？
+openspec archive <change-id> [--yes|-y]  # 标记完成（自动化场景加 --yes）
 ```
 
-Remember: Specs are truth. Changes are proposals. Keep them in sync.
+请记住：Specs 是事实，Changes 是提案，二者要保持同步。

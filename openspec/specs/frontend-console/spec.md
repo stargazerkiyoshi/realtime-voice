@@ -1,8 +1,8 @@
-# frontend-console Specification
+# frontend-console 规范
 
-## Purpose
-TBD - created by archiving change add-frontend-console. Update Purpose after archive.
-## Requirements
+## 目的
+待补充：由归档变更 `add-frontend-console` 自动生成，归档后请更新本节目的。
+## 需求
 ### Requirement: 前端测试控制台
 系统 SHALL 提供一个前端测试控制台，用于连接 WebSocket 并控制会话。
 
@@ -23,4 +23,3 @@ TBD - created by archiving change add-frontend-console. Update Purpose after arc
 #### Scenario: 日志输出
 - **WHEN** 前端收到服务端消息或发送控制指令
 - **THEN** 日志区域 SHALL 记录并展示消息内容
-

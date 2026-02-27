@@ -1,8 +1,8 @@
-# platform-runtime Specification
+# platform-runtime 规范
 
-## Purpose
-TBD - created by archiving change refactor-runtime-to-nodejs. Update Purpose after archive.
-## Requirements
+## 目的
+待补充：由归档变更 `refactor-runtime-to-nodejs` 自动生成，归档后请更新本节目的。
+## 需求
 ### Requirement: Node.js 运行时
 系统 SHALL 运行于 Node.js，并使用 TypeScript 与 Fastify 作为主要 Web 框架。
 
@@ -23,4 +23,3 @@ TBD - created by archiving change refactor-runtime-to-nodejs. Update Purpose aft
 #### Scenario: 迁移后清理
 - **WHEN** Node.js 实现达到功能对齐
 - **THEN** Python 运行时入口 SHALL 被移除或归档
-
