@@ -1,0 +1,312 @@
+{
+  "runId": "a-channel-regression-1772175133693-kwjnnx",
+  "startedAt": "2026-02-27T06:52:13.693Z",
+  "endedAt": "2026-02-27T06:52:16.327Z",
+  "durationMs": 2634,
+  "git": {
+    "branch": "main",
+    "head": "6f4ed0b"
+  },
+  "options": {
+    "url": "ws://127.0.0.1:3000/ws/voice",
+    "selectedScenarios": [
+      "s01-lifecycle",
+      "s02-audio-before-start",
+      "s03-audio-to-asr",
+      "s04-asr-final-to-assistant",
+      "s05-assistant-to-tts",
+      "s06-barge-in",
+      "s07-close-mic-recovery",
+      "s08-ping-pong",
+      "s09-invalid-message",
+      "s10-disconnect-cleanup"
+    ],
+    "gateStage": "A",
+    "spawnServer": true,
+    "enforceThresholds": false,
+    "prerequisites": {
+      "asr": false,
+      "tts": false,
+      "llm": false,
+      "pipeline": false
+    }
+  },
+  "thresholds": {
+    "metric": "speech_end_to_first_audio_ms",
+    "p50Ms": 900,
+    "p95Ms": 1500,
+    "stage": "A",
+    "appliedAsFailure": false
+  },
+  "performance": {
+    "sampleCount": 0,
+    "thresholdStatus": "na"
+  },
+  "summary": {
+    "total": 10,
+    "passed": 5,
+    "failed": 0,
+    "skipped": 5,
+    "status": "pass"
+  },
+  "scenarios": [
+    {
+      "id": "s01-lifecycle",
+      "name": "连接与会话生命周期",
+      "description": "connect -> start -> ready -> stop -> end",
+      "status": "pass",
+      "startedAt": "2026-02-27T06:52:15.898Z",
+      "endedAt": "2026-02-27T06:52:15.916Z",
+      "durationMs": 18,
+      "assertions": [
+        {
+          "name": "收到 ready",
+          "pass": true
+        },
+        {
+          "name": "收到 end",
+          "pass": true
+        },
+        {
+          "name": "ready 在 end 之前",
+          "pass": true
+        }
+      ],
+      "metrics": [],
+      "notes": [],
+      "events": [
+        {
+          "atMs": 1772175135910,
+          "type": "ready",
+          "payload": {
+            "type": "ready",
+            "session_id": "s01-1772175135905-hz0tel"
+          }
+        },
+        {
+          "atMs": 1772175135914,
+          "type": "end",
+          "payload": {
+            "type": "end",
+            "reason": "regression-stop"
+          }
+        }
+      ]
+    },
+    {
+      "id": "s02-audio-before-start",
+      "name": "未 start 先 audio",
+      "description": "先发 audio 必须返回 NO_SESSION",
+      "status": "pass",
+      "startedAt": "2026-02-27T06:52:15.916Z",
+      "endedAt": "2026-02-27T06:52:15.924Z",
+      "durationMs": 8,
+      "assertions": [
+        {
+          "name": "收到 error",
+          "pass": true
+        },
+        {
+          "name": "错误码为 NO_SESSION",
+          "pass": true,
+          "details": "code=NO_SESSION"
+        }
+      ],
+      "metrics": [],
+      "notes": [],
+      "events": [
+        {
+          "atMs": 1772175135922,
+          "type": "error",
+          "payload": {
+            "type": "error",
+            "code": "NO_SESSION",
+            "message": "send start first"
+          }
+        }
+      ]
+    },
+    {
+      "id": "s03-audio-to-asr",
+      "name": "音频上行到 ASR",
+      "description": "audio 可触发 asr 事件",
+      "status": "skip",
+      "startedAt": "2026-02-27T06:52:15.924Z",
+      "endedAt": "2026-02-27T06:52:15.924Z",
+      "durationMs": 0,
+      "assertions": [],
+      "metrics": [],
+      "notes": [
+        "需要同时配置 VOLC_* 与 OPENAI_API_KEY"
+      ],
+      "skipReason": "缺少 ASR/TTS/LLM 必要环境变量，跳过链路场景",
+      "events": []
+    },
+    {
+      "id": "s04-asr-final-to-assistant",
+      "name": "ASR final 到 assistant",
+      "description": "asr final 后应出现 assistant 输出",
+      "status": "skip",
+      "startedAt": "2026-02-27T06:52:15.925Z",
+      "endedAt": "2026-02-27T06:52:15.926Z",
+      "durationMs": 1,
+      "assertions": [],
+      "metrics": [],
+      "notes": [
+        "需要同时配置 VOLC_* 与 OPENAI_API_KEY"
+      ],
+      "skipReason": "缺少 ASR/TTS/LLM 必要环境变量，跳过链路场景",
+      "events": []
+    },
+    {
+      "id": "s05-assistant-to-tts",
+      "name": "assistant 到 tts",
+      "description": "assistant 输出后应出现 tts 下发",
+      "status": "skip",
+      "startedAt": "2026-02-27T06:52:15.927Z",
+      "endedAt": "2026-02-27T06:52:15.930Z",
+      "durationMs": 3,
+      "assertions": [],
+      "metrics": [],
+      "notes": [
+        "需要同时配置 VOLC_* 与 OPENAI_API_KEY"
+      ],
+      "skipReason": "缺少 ASR/TTS/LLM 必要环境变量，跳过链路场景",
+      "events": []
+    },
+    {
+      "id": "s06-barge-in",
+      "name": "打断语义",
+      "description": "SPEAKING 期间开口触发 barge_in 并中断输出",
+      "status": "skip",
+      "startedAt": "2026-02-27T06:52:15.930Z",
+      "endedAt": "2026-02-27T06:52:15.931Z",
+      "durationMs": 1,
+      "assertions": [],
+      "metrics": [],
+      "notes": [
+        "需要同时配置 VOLC_* 与 OPENAI_API_KEY"
+      ],
+      "skipReason": "缺少 ASR/TTS/LLM 必要环境变量，跳过链路场景",
+      "events": []
+    },
+    {
+      "id": "s07-close-mic-recovery",
+      "name": "close_mic 恢复能力",
+      "description": "close_mic 后可继续新一轮输入",
+      "status": "skip",
+      "startedAt": "2026-02-27T06:52:15.932Z",
+      "endedAt": "2026-02-27T06:52:15.932Z",
+      "durationMs": 0,
+      "assertions": [],
+      "metrics": [],
+      "notes": [
+        "需要同时配置 VOLC_* 与 OPENAI_API_KEY"
+      ],
+      "skipReason": "缺少 ASR/TTS/LLM 必要环境变量，跳过链路场景",
+      "events": []
+    },
+    {
+      "id": "s08-ping-pong",
+      "name": "保活链路",
+      "description": "ping 必须返回 pong",
+      "status": "pass",
+      "startedAt": "2026-02-27T06:52:15.932Z",
+      "endedAt": "2026-02-27T06:52:15.940Z",
+      "durationMs": 8,
+      "assertions": [
+        {
+          "name": "收到 pong",
+          "pass": true
+        }
+      ],
+      "metrics": [],
+      "notes": [],
+      "events": [
+        {
+          "atMs": 1772175135938,
+          "type": "pong",
+          "payload": {
+            "type": "pong",
+            "ts_ms": 1772175135937
+          }
+        }
+      ]
+    },
+    {
+      "id": "s09-invalid-message",
+      "name": "非法消息健壮性",
+      "description": "非法 payload 返回错误且连接继续可用",
+      "status": "pass",
+      "startedAt": "2026-02-27T06:52:15.940Z",
+      "endedAt": "2026-02-27T06:52:15.950Z",
+      "durationMs": 10,
+      "assertions": [
+        {
+          "name": "收到 WS_HANDLER_ERROR",
+          "pass": true
+        },
+        {
+          "name": "异常后连接仍可返回 pong",
+          "pass": true
+        }
+      ],
+      "metrics": [],
+      "notes": [],
+      "events": [
+        {
+          "atMs": 1772175135946,
+          "type": "error",
+          "payload": {
+            "type": "error",
+            "code": "WS_HANDLER_ERROR",
+            "message": "invalid websocket message"
+          }
+        },
+        {
+          "atMs": 1772175135948,
+          "type": "pong",
+          "payload": {
+            "type": "pong",
+            "ts_ms": 1772175135947
+          }
+        }
+      ]
+    },
+    {
+      "id": "s10-disconnect-cleanup",
+      "name": "断连清理能力",
+      "description": "客户端断连后服务仍可处理新连接",
+      "status": "pass",
+      "startedAt": "2026-02-27T06:52:15.950Z",
+      "endedAt": "2026-02-27T06:52:16.313Z",
+      "durationMs": 363,
+      "assertions": [
+        {
+          "name": "断连后新连接可正常 pong",
+          "pass": true
+        }
+      ],
+      "metrics": [],
+      "notes": [],
+      "events": [
+        {
+          "atMs": 1772175135957,
+          "type": "ready",
+          "payload": {
+            "type": "ready",
+            "session_id": "s10-1772175135955-t2azn6"
+          }
+        },
+        {
+          "atMs": 1772175136311,
+          "type": "pong",
+          "payload": {
+            "type": "pong",
+            "ts_ms": 1772175136311
+          }
+        }
+      ]
+    }
+  ]
+}

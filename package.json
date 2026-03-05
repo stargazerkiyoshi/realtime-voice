@@ -7,10 +7,13 @@
                     "dev":  "tsx watch src/server.ts",
                     "dev:example": "powershell -ExecutionPolicy Bypass -File scripts/start.example.ps1",
                     "dev:local": "powershell -ExecutionPolicy Bypass -File scripts/start.local.ps1",
-                    "build":  "tsc -p tsconfig.json",
-                    "start":  "node dist/server.js",
-                    "test":  "node --import tsx --test tests/async-queue.test.ts tests/chunker.test.ts tests/asr-parse.test.ts tests/playback-queue.test.ts",
-                    "asr:diag": "node --import tsx scripts/asr.diagnose.ts"
+    "build":  "tsc -p tsconfig.json",
+    "start":  "node dist/server.js",
+    "test":  "node --import tsx --test tests/async-queue.test.ts tests/chunker.test.ts tests/asr-parse.test.ts tests/playback-queue.test.ts",
+    "asr:diag": "node --import tsx scripts/asr.diagnose.ts",
+    "regression:a-channel": "node --import tsx scripts/a-channel-regression.ts",
+    "regression:a-channel:nightly": "node --import tsx scripts/a-channel-regression.ts --gate-stage B",
+    "regression:a-channel:summary": "node --import tsx scripts/a-channel-regression-summary.ts"
                 },
     "dependencies":  {
         "fastify":  "^4.28.1",

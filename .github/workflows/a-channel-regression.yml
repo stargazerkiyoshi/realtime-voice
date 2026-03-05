@@ -1,0 +1,81 @@
+name: A Channel Regression Matrix
+
+on:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: '15 2 * * *'
+
+jobs:
+  regression-pr:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run A-channel regression (non-blocking)
+        id: regression
+        continue-on-error: true
+        run: pnpm run regression:a-channel -- --gate-stage A --output artifacts/a-channel-pr.json
+
+      - name: Upload regression artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: a-channel-regression-pr
+          path: artifacts/a-channel-pr.json
+
+  regression-nightly:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run A-channel regression nightly (soft gate)
+        id: regression
+        continue-on-error: true
+        run: pnpm run regression:a-channel:nightly -- --output artifacts/a-channel-nightly.json
+
+      - name: Emit nightly soft-gate warning
+        if: steps.regression.outcome == 'failure'
+        run: |
+          echo "::warning::A-channel regression nightly soft-gate failed. Review artifact for details."
+
+      - name: Upload nightly regression artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: a-channel-regression-nightly
+          path: artifacts/a-channel-nightly.json
