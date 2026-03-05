@@ -91,6 +91,7 @@ export class VolcAsrClient implements AsrProvider {
   private waiters: Array<(v?: AsrPartial | AsrFinal) => void> = [];
   private idleTimer: NodeJS.Timeout | null = null;
   private idleMs: number;
+  private closeStartedAt: number | null = null;
 
   constructor(
     private readonly opts: {
@@ -146,6 +147,9 @@ export class VolcAsrClient implements AsrProvider {
     this.ws.on('close', () => {
       logger.warn('asr ws closed', { closing: this.closing, sentAudioFrames: this.sentAudioFrames });
       this.connected = false;
+      this.started = false;
+      this.finishing = false;
+      this.closeStartedAt = null;
       if (!this.closing && !this.lastError) {
         this.lastError = new Error('ASR websocket closed unexpectedly');
       }
@@ -330,6 +334,18 @@ export class VolcAsrClient implements AsrProvider {
     }
   }
 
+  private async waitSocketClosed(timeoutMs: number) {
+    const ws = this.ws;
+    if (!ws || ws.readyState === WebSocket.CLOSED) return;
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(() => resolve(), timeoutMs);
+      ws.once('close', () => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+  }
+
   async connect() {
     if (this.closing) return;
     if (!this.connectPromise) {
@@ -351,6 +367,7 @@ export class VolcAsrClient implements AsrProvider {
     if (this.closing) return;
     this.finishing = true;
     this.closing = true;
+    this.closeStartedAt = Date.now();
     if (this.idleTimer) {
       clearTimeout(this.idleTimer);
       this.idleTimer = null;
@@ -370,11 +387,23 @@ export class VolcAsrClient implements AsrProvider {
     } catch {
       // ignore
     }
-    await sleep(250);
-    this.ws?.close();
+    await sleep(320);
+    if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
+      this.ws.close();
+      await this.waitSocketClosed(1200);
+    }
+    if (this.ws && this.ws.readyState !== WebSocket.CLOSED) {
+      try {
+        this.ws.terminate();
+      } catch {
+        // ignore
+      }
+      await this.waitSocketClosed(300);
+    }
     this.connected = false;
     this.started = false;
     this.finishing = false;
+    this.closeStartedAt = null;
     this.seq = 2;
     this.wakeWaiters();
     logger.info('asr closed', { sentAudioFrames: this.sentAudioFrames, recvFrames: this.recvFrames });
@@ -407,6 +436,11 @@ export class VolcAsrClient implements AsrProvider {
           yield v;
           continue;
         }
+      }
+      // During close, give a brief drain window for tail final frames before exiting stream.
+      if (this.closing && !this.connected && this.closeStartedAt && Date.now() - this.closeStartedAt < 400) {
+        await sleep(40);
+        continue;
       }
       if (this.closing && !this.connected) {
         break;
